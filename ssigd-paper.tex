@@ -1,0 +1,204 @@
+% --- environments (put in your preamble once) ---
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm,algpseudocode}
+\newtheorem{assumption}{Assumption}
+\newtheorem{theorem}{Theorem}
+\newtheorem{definition}{Definition}
+
+% --- Problem setup (UL/LL) ---
+\paragraph{Bilevel problem (stochastic UL, linearly constrained strongly convex LL).}
+\begin{align}
+\min_{x\in \mathcal{X}} \quad 
+& G(x) := f\big(x, y^*(x)\big) := \mathbb{E}_{\xi}\!\left[\tilde f\big(x, y^*(x); \xi\big)\right], \label{eq:ul}\\
+\text{s.t.}\quad 
+& y^*(x) \in \arg\min_{y\in \mathbb{R}^{d_\ell}}\left\{\, h(x,y)\; \big| \; Ay \le b \,\right\}. \label{eq:ll}
+\end{align}
+Here $\mathcal{X}\subset\mathbb{R}^{d_u}$ is convex/closed, $h$ is strongly convex in $y$, and $Ay\le b$ are linear constraints.
+
+% --- Implicit and approximate gradients (for context) ---
+\paragraph{Implicit and approximate implicit gradients.}
+Under the smoothed LL (with linear perturbation $q^\top y$) the (exact) implicit gradient is
+\begin{equation}
+\nabla F(x) \;=\; \nabla_x f\big(x,y^*(x)\big)\;+\;\big[\nabla y^*(x)\big]^\top \nabla_y f\big(x,y^*(x)\big),
+\label{eq:implicit-grad}
+\end{equation}
+and in practice we use the approximate implicit gradient
+\begin{equation}
+\widehat{\nabla}F(x) \;=\; \nabla_x f\big(x,\hat y(x)\big)\;+\;\big[\widehat{\nabla} y^*(x)\big]^\top \nabla_y f\big(x,\hat y(x)\big),
+\label{eq:approx-implicit-grad}
+\end{equation}
+where $\hat y(x)$ is an accurate feasible approximate LL solution used to plug into the closed-form $\nabla y^*(x)$ expression.
+
+% --- Stochastic implicit gradient used by [S]SIGD ---
+\paragraph{Stochastic implicit gradient (used by [S]SIGD).}
+\begin{equation}
+\widehat{\nabla}F(x;\xi)
+\;=\;
+\nabla_x \tilde f\big(x,\hat y(x);\xi\big)\;+\;\big[\widehat{\nabla}y^*(x)\big]^\top \nabla_y \tilde f\big(x,\hat y(x);\xi\big).
+\label{eq:stoch-implicit-grad}
+\end{equation}
+
+
+\begin{assumption}[Stochastic gradients]
+$\mathbb{E}_\xi[\nabla \tilde f(x,y;\xi)] = \nabla f(x,y)$ and 
+$\mathbb{E}_\xi\|\nabla \tilde f(x,y;\xi)-\nabla f(x,y)\|^2=\sigma_f^2$ for some $\sigma_f>0$. 
+\label{ass:stoch}
+\end{assumption}
+
+
+% --- [S]SIGD algorithm ---
+\begin{algorithm}[H]
+\caption{[Stochastic] Smoothed Implicit Gradient Descent \;([S]SIGD)}
+\begin{algorithmic}[1]
+\State \textbf{Input:} $x_0$, total iters $T$, stepsizes $\{\beta_r\}_{r=0}^{T-1}$, LL accuracy target $\delta$.
+\State Sample a single perturbation vector $q$ (fixed through training) and perturb the LL objective.
+\For{$r=0,1,\dots,T-1$}
+    \State Compute a feasible $\hat y(x_r)$ that satisfies the active-set/accuracy conditions (Assump. 2 in the paper).
+    \State Compute $\widehat{\nabla}F(x_r;\xi_r)$ via \eqref{eq:stoch-implicit-grad}.
+    \State \textbf{Update:} $x_{r+1} \leftarrow \mathrm{proj}_{\mathcal{X}}\!\big(x_r - \beta_r\,\widehat{\nabla}F(x_r;\xi_r)\big)$.
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+:contentReference[oaicite:5]{index=5}
+
+% --- (Context) Single perturbation & goal ---
+\emph{Remarks.} A single draw of $q$ suffices and is kept fixed; this yields almost-sure differentiability of the smoothed implicit objective along the iterate sequence and enables first-order methods.
+
+% --- Weakly-convex setting and Moreau envelope ---
+\begin{assumption}[Weak convexity of $F$]
+There exists $\rho>0$ such that $F(z)\ge F(x)+\langle \nabla F(x), z-x\rangle - \frac{\rho}{2}\|z-x\|^2,\ \forall x,z.$
+\label{ass:weakly}
+\end{assumption}
+
+
+\begin{definition}[Moreau envelope and prox map]
+For $\lambda>0$, define 
+\[
+H(x):=F(x)+\iota_{\mathcal{X}}(x),\qquad 
+H_\lambda(x):=\min_{z\in\mathcal{X}}\Big\{F(z)+\tfrac{1}{2\lambda}\|x-z\|^2\Big\},\qquad 
+\mathrm{prox}_{\lambda H}(x):=\arg\min_{z\in\mathcal{X}}\Big\{F(z)+\tfrac{1}{2\lambda}\|x-z\|^2\Big\}.
+\]
+Moreover, $\|x-\mathrm{prox}_{\lambda H}(x)\|=\lambda\|\nabla H_\lambda(x)\|$.
+\label{def:moreau}
+\end{definition}
+
+
+% --- Convergence guarantees for [S]SIGD ---
+\paragraph{Finite-time guarantees for [S]SIGD.}
+Let $D_X:=\sup_{x,\bar x\in \mathcal{X}}\|x-\bar x\|$, and $L_F$ be the constant appearing in Lemma 3 for bounding $\|\nabla F\|$ and bias from LL inaccuracy.
+
+\begin{theorem}[Weakly convex case]
+Under Assumptions \ref{ass:stoch} and \ref{ass:weakly}, with constant stepsize $\beta_r=\beta$ and any $\hat\rho> \tfrac{3}{2}\rho$, the [S]SIGD iterates satisfy (w.p.~1)
+\[
+\frac{1}{T}\sum_{r=0}^{T-1}\mathbb{E}\big\|\nabla H_{1/\hat\rho}(x_r)\big\|^2
+\;\le\;
+\frac{2\hat\rho}{2\hat\rho-3\rho}\Bigg[
+\frac{H_{1/\hat\rho}(x_0)-H^*}{\beta T}
+\;+\;\beta\,\hat\rho\big(\sigma_F^2+L_F^2\big)
+\;+\;\frac{\hat\rho}{2\rho}L_F^2\,\delta^2
+\Bigg].
+\]
+Choosing $\beta=\mathcal{O}(1/\sqrt{T})$ yields $\mathcal{O}(1/\sqrt{T})$ decay to a neighborhood governed by $\delta$.
+\end{theorem}
+
+\begin{theorem}[Strongly convex case]
+If $F$ is $\mu_F$-strongly convex, then with $\beta_r=\frac{1}{\mu_F(r+1)}$,
+\[
+\mathbb{E}\big[F(x)-F^*\big]
+\;\le\;
+\frac{\sigma_F^2+L_F^2}{\mu_F}\cdot \frac{\log T}{T}
+\;+\; D_X L_F\,\delta
+\quad\text{(w.p.~1)}.
+\]
+Hence [S]SIGD attains $\tilde{\mathcal{O}}(1/T)$ up to an LL-inexactness term.
+\end{theorem}
+
+\begin{theorem}[Convex case]
+If $F$ is convex ($\mu_F=0$), with $\beta_r=\beta$ and the ergodic average $\bar x=\frac{1}{T}\sum_{r=0}^{T-1}x_r$,
+\[
+\mathbb{E}\big[F(\bar x)-F^*\big]
+\;\le\;
+\frac{\|x_1-x^*\|^2}{\beta T}
+\;+\;2\beta(\sigma_F^2+L_F^2)
+\;+\; D_X L_F\,\delta
+\quad\text{(w.p.~1)}.
+\]
+Setting $\beta=\mathcal{O}(1/\sqrt{T})$ yields $\mathcal{O}(1/\sqrt{T})$ rates to an LL-inexactness neighborhood.
+\end{theorem}
+% ==========================
+% Experiments
+% ==========================
+\section{Experiments}
+
+\paragraph{Tasks \& Data.}
+We evaluate on CIFAR-10 and CIFAR-100 (32\,$\times$\,32 RGB). Following common practice, we use random crop ($4$-px padding) and random horizontal flip for training, and center-crop only for testing. Inputs are scaled to $[0,1]$.
+
+\paragraph{Model.}
+We adopt a CIFAR-adjusted ResNet-18 (no initial max-pooling; first conv $3\times3$ stride $1$). 
+
+\paragraph{Adversary (Lower Level).}
+We use an $\ell_\infty$-bounded PGD adversary with budget $\varepsilon \in \{8/255,\;16/255\}$, $K$ steps during training (default $K{=}10$) and step size $\alpha{=}\varepsilon/4$. At evaluation we report robustness under PGD-20 and (optionally) AutoAttack.
+
+\paragraph{Baselines.}
+We compare \textbf{SSIGD} against (i) standard ERM, (ii) PGD Adversarial Training (Madry) with the same $\varepsilon$, and (iii) TRADES. All baselines use identical architecture, data pipeline, and training budget.
+
+\paragraph{Training Setup.}
+Unless stated, batch size $128$, epochs $100$, SGD with momentum $0.9$ and weight decay $5{\times}10^{-4}$. Learning rate $0.1$ with MultiStep decay at epochs $\{75,90\}$ (factor $0.1$). For SSIGD we use a single fixed LL smoothing perturbation, a feasible $\hat y(x)$ at tolerance $\delta$ for the LL solve, and an outer stepsize schedule $\beta_r$ (constant or $\beta_0/\sqrt{r{+}1}$); we tune $\beta_0$ on a held-out split.
+
+\paragraph{Metrics.}
+We report \emph{standard accuracy} (SA) on clean inputs and \emph{robust accuracy} (RA) under the specified attack.
+
+% --- WordPress KaTeX blocks for the two metric definitions ---
+$$ \mathrm{SA} \;=\; \frac{1}{N}\sum_{i=1}^{N}\mathbf{1}\!\left[\arg\max_{c}\, p_\theta(c\,|\,x_i)=y_i\right]. $$
+$$
+\mathrm{RA}_{\text{PGD-}20} \;=\; \frac{1}{N}\sum_{i=1}^{N}\mathbf{1}\!\left[\arg\max_{c}\, p_\theta(c\,|\,\tilde x_i)=y_i\right],
+\quad \text{with } \tilde x_i \in \mathbb{B}_\infty(x_i,\varepsilon).
+$$
+\vspace{0.5em}
+\paragraph{Compute.}
+All runs use a single modern GPU (e.g., A100/3090). We report mean over $3$ seeds when applicable.
+
+% ---------- Results Table Template ----------
+\begin{table}[t]
+\centering
+\caption{Clean (SA) and robust (RA, $\ell_\infty$) accuracy (%) on CIFAR-10/100.
+Training attack uses PGD-$K$ with $\alpha=\varepsilon/4$; evaluation uses PGD-20.
+Fill in numbers from your logs.}
+\label{tab:ssigd-results}
+\setlength{\tabcolsep}{7pt}
+\begin{tabular}{lcccccc}
+\toprule
+& \multicolumn{2}{c}{\textbf{CIFAR-10}, $\varepsilon=\frac{8}{255}$}
+& \multicolumn{2}{c}{\textbf{CIFAR-10}, $\varepsilon=\frac{16}{255}$}
+& \multicolumn{2}{c}{\textbf{CIFAR-100}, $\varepsilon=\frac{8}{255}$} \
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+\textbf{Method} & SA & RA & SA & RA & SA & RA \
+\midrule
+ERM & ,,-- & -- & -- & -- & -- & -- \
+PGD-AT & -- & -- & -- & -- & -- & -- \
+TRADES & -- & -- & -- & -- & -- & -- \
+\textbf{SSIGD} & -- & -- & -- & -- & -- & -- \
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ---------- Learning Curves / Ablations ----------
+\begin{figure}[t]
+\centering
+\begin{subfigure}{0.48\linewidth}
+\centering
+\includegraphics[width=\linewidth]{figs/ssigd_c10_eps8_learning_curve.pdf}
+\caption{CIFAR-10, $\varepsilon{=}8/255$ learning curves (SA/RA).}
+\end{subfigure}\hfill
+\begin{subfigure}{0.48\linewidth}
+\centering
+\includegraphics[width=\linewidth]{figs/ssigd_ablation_stepsize.pdf}
+\caption{SSIGD stepsize $\beta$ ablation (RA at PGD-20).}
+\end{subfigure}
+\caption{Training dynamics and ablations for SSIGD.}
+\label{fig:ssigd-curves}
+\end{figure}
+
+% ---------- Repro Details ----------
+\paragraph{Reproducibility.}
+We fix data order and initialization seeds for each run;

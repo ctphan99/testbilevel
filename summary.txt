@@ -1,0 +1,1246 @@
+%%%%
+import torch
+import torch.nn as nn
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Dict, List, Tuple, Optional
+import time
+from dataclasses import dataclass
+
+@dataclass
+class AlgorithmMetrics:
+    """Comprehensive metrics for algorithm performance"""
+    gaps: List[float]
+    times: List[float]
+    x_norms: List[float]
+    y_norms: List[float]
+    grad_norms: List[float]
+    step_sizes: List[float]
+    convergence_iter: Optional[int] = None
+    final_gap: Optional[float] = None
+    
+class ConstrainedStochasticBilevelProblem:
+    """
+    Linearly constrained stochastic bilevel optimization problem
+    Following the F2CSA paper specification:
+    
+    min_{x ∈ X} F(x) := E[f(x, y*(x); ξ)]
+    s.t. y*(x) ∈ argmin_{y: h(x,y) ≤ 0} E[g(x, y; ζ)]
+    
+    where h(x,y) := Ax - By - b ≤ 0 (linear constraints)
+    """
+    
+    def __init__(self, dim: int = 10, num_constraints: int = 3, noise_std: float = 0.01, device: str = 'cpu'):
+        self.dim = dim
+        self.num_constraints = num_constraints
+        self.noise_std = noise_std
+        self.device = device
+        
+        # Upper level problem parameters
+        self.Q_upper = torch.randn(dim, dim, device=device) * 0.1
+        self.Q_upper = self.Q_upper + self.Q_upper.T  # Make symmetric
+        self.Q_upper += torch.eye(dim, device=device) * 0.5  # Ensure positive definite
+        
+        self.c_upper = torch.randn(dim, device=device) * 0.1
+        self.x_target = torch.randn(dim, device=device)
+        
+        # Lower level problem parameters
+        self.Q_lower = torch.randn(dim, dim, device=device) * 0.1
+        self.Q_lower = self.Q_lower + self.Q_lower.T  # Make symmetric
+        self.Q_lower += torch.eye(dim, device=device) * 1.0  # Ensure strongly convex
+        
+        self.c_lower = torch.randn(dim, device=device) * 0.1
+        self.P = torch.randn(dim, dim, device=device) * 0.1  # Coupling matrix
+        
+        # Linear constraint parameters: h(x,y) = Ax - By - b ≤ 0
+        self.A = torch.randn(num_constraints, dim, device=device) * 0.2
+        self.B = torch.randn(num_constraints, dim, device=device) * 0.2
+        self.b = torch.randn(num_constraints, device=device) * 0.5
+        
+        # Ensure constraints are feasible by adjusting b
+        self.b = self.b + torch.abs(self.b) * 0.5  # Make constraints not too tight
+        
+        print(f"📊 Created Constrained Bilevel Problem:")
+        print(f"   Dimension: {dim}")
+        print(f"   Constraints: {num_constraints}")
+        print(f"   A condition: {torch.linalg.cond(self.A @ self.A.T):.2f}")
+        print(f"   B condition: {torch.linalg.cond(self.B @ self.B.T):.2f}")
+        print(f"   Q_lower condition: {torch.linalg.cond(self.Q_lower):.2f}")
+    
+    def upper_level_objective(self, x: torch.Tensor, y: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
+        """
+        Upper level objective f(x,y) with stochastic noise
+        f(x,y) = 0.5 * (x - x_target)^T Q_upper (x - x_target) + c_upper^T y + noise
+        """
+        if seed is not None:
+            torch.manual_seed(seed)
+        
+        noise = torch.randn_like(x) * self.noise_std
+        
+        term1 = 0.5 * (x - self.x_target) @ self.Q_upper @ (x - self.x_target)
+        term2 = self.c_upper @ y
+        
+        return term1 + term2 + noise.sum()
+    
+    def lower_level_objective(self, x: torch.Tensor, y: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
+        """
+        Lower level objective g(x,y) with stochastic noise
+        g(x,y) = 0.5 * y^T Q_lower y + (c_lower + P^T x)^T y + noise
+        """
+        if seed is not None:
+            torch.manual_seed(seed)
+        
+        noise = torch.randn_like(y) * self.noise_std
+        
+        term1 = 0.5 * y @ self.Q_lower @ y
+        term2 = (self.c_lower + self.P.T @ x) @ y
+        
+        return term1 + term2 + noise.sum()
+    
+    def constraint_function(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """
+        Linear constraint function h(x,y) = Ax - By - b
+        Returns constraint values (should be ≤ 0 for feasibility)
+        """
+        return self.A @ x - self.B @ y - self.b
+    
+    def is_feasible(self, x: torch.Tensor, y: torch.Tensor, tolerance: float = 1e-6) -> bool:
+        """Check if (x,y) satisfies the linear constraints"""
+        h_values = self.constraint_function(x, y)
+        return torch.all(h_values <= tolerance)
+    
+    def solve_lower_level_constrained(self, x: torch.Tensor, seed: Optional[int] = None, 
+                                    max_iter: int = 1000, tolerance: float = 1e-6) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Solve constrained lower level problem using projected gradient descent
+        Returns (y*, λ*) where λ* are the dual variables
+        """
+        if seed is not None:
+            torch.manual_seed(seed)
+        
+        # Initialize y
+        y = torch.randn(self.dim, device=self.device) * 0.1
+        lambda_dual = torch.zeros(self.num_constraints, device=self.device)
+        
+        # Projected gradient descent with dual updates
+        lr_primal = 0.01
+        lr_dual = 0.01
+        
+        for iteration in range(max_iter):
+            # Compute gradients
+            y_temp = y.clone().requires_grad_(True)
+            obj_val = self.lower_level_objective(x, y_temp, seed)
+            grad_y = torch.autograd.grad(obj_val, y_temp)[0]
+            
+            # Constraint values and gradients
+            h_values = self.constraint_function(x, y)
+            grad_h = -self.B  # ∇_y h(x,y) = -B
+            
+            # Primal update with dual correction
+            y_new = y - lr_primal * (grad_y + grad_h.T @ lambda_dual)
+            
+            # Dual update (gradient ascent on dual)
+            lambda_new = torch.clamp(lambda_dual + lr_dual * h_values, min=0.0)
+            
+            # Check convergence
+            primal_residual = torch.norm(y_new - y)
+            dual_residual = torch.norm(lambda_new - lambda_dual)
+            
+            y = y_new
+            lambda_dual = lambda_new
+            
+            if primal_residual < tolerance and dual_residual < tolerance:
+                break
+        
+        return y, lambda_dual
+    
+    def solve_lower_level(self, x: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
+        """Solve lower level problem (returns only y* for compatibility)"""
+        y_star, _ = self.solve_lower_level_constrained(x, seed)
+        return y_star
+    
+    def bilevel_objective(self, x: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
+        """Full bilevel objective F(x) = f(x, y*(x))"""
+        y_star = self.solve_lower_level(x, seed)
+        return self.upper_level_objective(x, y_star, seed)
+    
+    def compute_gap(self, x: torch.Tensor, y: torch.Tensor) -> float:
+        """Compute optimality gap (for compatibility)"""
+        current_obj = self.bilevel_objective(x).item()
+        # Simple gap approximation
+        return abs(current_obj)
+    
+    def get_problem_statistics(self) -> Dict:
+        """Get problem characteristics for analysis"""
+        return {
+            'dim': self.dim,
+            'num_constraints': self.num_constraints,
+            'A_condition': torch.linalg.cond(self.A @ self.A.T).item(),
+            'B_condition': torch.linalg.cond(self.B @ self.B.T).item(),
+            'Q_lower_condition': torch.linalg.cond(self.Q_lower).item(),
+            'Q_upper_condition': torch.linalg.cond(self.Q_upper).item(),
+            'constraint_tightness': self.b.norm().item(),
+            'coupling_strength': self.P.norm().item()
+        }
+
+class DSBLOSolver:
+    """DS-BLO with original doubly stochastic gradient computation + CRN fix"""
+    
+    def __init__(self, lr: float = 0.01, sigma: float = 0.01, momentum: float = 0.9):
+        self.lr = lr
+        self.sigma = sigma
+        self.momentum = momentum
+        self.velocity_x = None
+        self.velocity_y = None
+        
+    def step(self, problem: StochasticBilevelProblem, x: torch.Tensor, y: torch.Tensor, 
+             iteration: int) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+        """DS-BLO step with detailed tracking"""
+        
+        if self.velocity_x is None:
+            self.velocity_x = torch.zeros_like(x)
+            self.velocity_y = torch.zeros_like(y)
+        
+        # DS-BLO: Doubly stochastic perturbation for gradient estimation
+        u_x = torch.randn_like(x) * self.sigma
+        u_y = torch.randn_like(y) * self.sigma
+        
+        # Use CRN for function evaluations within DS-BLO method
+        seed = iteration * 1000  # Deterministic seed based on iteration
+        
+        # Forward perturbation
+        torch.manual_seed(seed)
+        f_plus = problem.bilevel_objective(x + u_x)
+        
+        # Backward perturbation with same seed for correlation
+        torch.manual_seed(seed)
+        f_minus = problem.bilevel_objective(x - u_x)
+        
+        # DS-BLO gradient estimation
+        func_diff = f_plus - f_minus
+        grad_x = func_diff / (2 * self.sigma) * u_x
+        
+        # Lower level gradient (simplified)
+        torch.manual_seed(seed)
+        g_plus = problem.lower_level_objective(x, y + u_y)
+        torch.manual_seed(seed)
+        g_minus = problem.lower_level_objective(x, y - u_y)
+        
+        func_diff_y = g_plus - g_minus
+        grad_y = func_diff_y / (2 * self.sigma) * u_y
+        
+        # Momentum updates
+        self.velocity_x = self.momentum * self.velocity_x + grad_x
+        self.velocity_y = self.momentum * self.velocity_y + grad_y
+        
+        # Parameter updates
+        x_new = x - self.lr * self.velocity_x
+        y_new = y - self.lr * self.velocity_y
+        
+        # Detailed tracking
+        tracking_info = {
+            'perturbation_norm_x': u_x.norm().item(),
+            'perturbation_norm_y': u_y.norm().item(),
+            'function_diff': func_diff.item(),
+            'function_diff_y': func_diff_y.item(),
+            'grad_norm_x': grad_x.norm().item(),
+            'grad_norm_y': grad_y.norm().item(),
+            'velocity_norm_x': self.velocity_x.norm().item(),
+            'velocity_norm_y': self.velocity_y.norm().item(),
+            'sigma': self.sigma,
+            'avg_perturbation_norm': (u_x.norm() + u_y.norm()).item() / 2
+        }
+        
+        return x_new, y_new, tracking_info
+
+class F2CSASolver:
+    """F2CSA with original hypergradient computation + CRN fix"""
+    
+    def __init__(self, alpha: float = 0.5, gamma: float = 0.01, D: float = 1.0):
+        self.alpha = alpha
+        self.gamma = gamma
+        self.D = D
+        self.Delta = None
+        
+    def step(self, problem: StochasticBilevelProblem, x: torch.Tensor, y: torch.Tensor, 
+             iteration: int) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+        """F2CSA step with detailed tracking"""
+        
+        if self.Delta is None:
+            self.Delta = torch.zeros_like(x)
+        
+        # F2CSA: Two-timescale approach with hypergradient
+        s_t = torch.rand(1).item()  # Random sampling parameter
+        z_t = x + s_t * self.Delta
+        
+        # Use CRN for hypergradient computation within F2CSA method
+        seed = iteration * 1000
+        
+        # Compute hypergradient using F2CSA's method
+        eps = 0.01
+        torch.manual_seed(seed)
+        f_center = problem.bilevel_objective(z_t)
+        
+        # Finite difference for hypergradient
+        hypergradient = torch.zeros_like(x)
+        for i in range(x.shape[0]):
+            x_plus = z_t.clone()
+            x_plus[i] += eps
+            x_minus = z_t.clone()
+            x_minus[i] -= eps
+            
+            torch.manual_seed(seed)
+            f_plus = problem.bilevel_objective(x_plus)
+            torch.manual_seed(seed)
+            f_minus = problem.bilevel_objective(x_minus)
+            
+            hypergradient[i] = (f_plus - f_minus) / (2 * eps)
+        
+        # F2CSA momentum update
+        self.Delta = self.Delta - self.gamma * hypergradient
+        
+        # Clip Delta to maintain bounds
+        delta_norm = self.Delta.norm()
+        if delta_norm > self.D:
+            self.Delta = self.Delta * self.D / delta_norm
+            clipped = True
+        else:
+            clipped = False
+        
+        # Parameter update
+        x_new = x - self.alpha * hypergradient
+        
+        # Lower level update (simplified)
+        torch.manual_seed(seed)
+        y_new = problem.solve_lower_level(x_new, seed)
+        
+        # Detailed tracking
+        tracking_info = {
+            's_t': s_t,
+            'delta_norm': delta_norm.item(),
+            'hypergradient_norm': hypergradient.norm().item(),
+            'clipped': clipped,
+            'alpha': self.alpha,
+            'gamma': self.gamma,
+            'z_t_norm': z_t.norm().item(),
+            'f_center': f_center.item()
+        }
+        
+        return x_new, y_new, tracking_info
+
+class SSIGDSolver:
+    """SSIGD with original smoothed implicit gradient computation + CRN fix"""
+    
+    def __init__(self, lr: float = 0.01, epsilon: float = 0.01, 
+                 smoothing_samples: int = 5, momentum_coeff: float = 0.9):
+        self.lr = lr
+        self.epsilon = epsilon
+        self.smoothing_samples = smoothing_samples
+        self.momentum_coeff = momentum_coeff
+        self.momentum_x = None
+        self.momentum_y = None
+        
+    def compute_gradient_with_crn(self, problem: StochasticBilevelProblem, x: torch.Tensor, seed: int) -> torch.Tensor:
+        """Compute gradient with CRN for consistent evaluation"""
+        eps = 0.001
+        grad = torch.zeros_like(x)
+        
+        for i in range(x.shape[0]):
+            x_plus = x.clone()
+            x_plus[i] += eps
+            x_minus = x.clone()
+            x_minus[i] -= eps
+            
+            torch.manual_seed(seed)
+            f_plus = problem.bilevel_objective(x_plus)
+            torch.manual_seed(seed)
+            f_minus = problem.bilevel_objective(x_minus)
+            
+            grad[i] = (f_plus - f_minus) / (2 * eps)
+        
+        return grad
+        
+    def step(self, problem: StochasticBilevelProblem, x: torch.Tensor, y: torch.Tensor, 
+             iteration: int) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+        """SSIGD step with detailed tracking"""
+        
+        if self.momentum_x is None:
+            self.momentum_x = torch.zeros_like(x)
+            self.momentum_y = torch.zeros_like(y)
+        
+        # SSIGD: Smoothed implicit gradient computation
+        smoothed_grads_x = []
+        smoothed_grads_y = []
+        
+        for i in range(self.smoothing_samples):
+            # Smoothing perturbations
+            x_pert = x + torch.randn_like(x) * self.epsilon
+            y_pert = y + torch.randn_like(y) * self.epsilon
+            
+            # Use CRN within SSIGD's implicit gradient computation
+            seed = iteration * 1000 + i
+            
+            # Compute implicit gradients at perturbed points using CRN
+            grad_x = self.compute_gradient_with_crn(problem, x_pert, seed)
+            
+            # Simplified lower level gradient
+            torch.manual_seed(seed)
+            grad_y = torch.autograd.functional.jacobian(
+                lambda y_var: problem.lower_level_objective(x_pert, y_var), y_pert
+            )
+            
+            smoothed_grads_x.append(grad_x)
+            smoothed_grads_y.append(grad_y)
+        
+        # SSIGD: Average the smoothed gradients
+        grad_x_smoothed = torch.stack(smoothed_grads_x).mean(dim=0)
+        grad_y_smoothed = torch.stack(smoothed_grads_y).mean(dim=0)
+        
+        # Compute variance for tracking
+        grad_x_var = torch.stack(smoothed_grads_x).var(dim=0).mean().item()
+        grad_y_var = torch.stack(smoothed_grads_y).var(dim=0).mean().item()
+        
+        # SSIGD momentum updates
+        self.momentum_x = self.momentum_coeff * self.momentum_x + (1 - self.momentum_coeff) * grad_x_smoothed
+        self.momentum_y = self.momentum_coeff * self.momentum_y + (1 - self.momentum_coeff) * grad_y_smoothed
+        
+        # Parameter updates
+        x_new = x - self.lr * self.momentum_x
+        y_new = y - self.lr * self.momentum_y
+        
+        # Detailed tracking
+        tracking_info = {
+            'smoothing_samples': self.smoothing_samples,
+            'epsilon': self.epsilon,
+            'grad_variance_x': grad_x_var,
+            'grad_variance_y': grad_y_var,
+            'grad_norm_x': grad_x_smoothed.norm().item(),
+            'grad_norm_y': grad_y_smoothed.norm().item(),
+            'momentum_norm_x': self.momentum_x.norm().item(),
+            'momentum_norm_y': self.momentum_y.norm().item(),
+            'momentum_coeff': self.momentum_coeff,
+            'avg_grad_variance': (grad_x_var + grad_y_var) / 2
+        }
+        
+        return x_new, y_new, tracking_info
+
+def run_comprehensive_algorithm_tracking(dim: int = 10, max_iterations: int = 1000,
+                                       convergence_threshold: float = 0.01, device: str = 'cpu'):
+    """Run comprehensive tracking of all three algorithms with detailed analysis"""
+
+    print(f"🔬 COMPREHENSIVE ALGORITHM TRACKING")
+    print(f"📊 Problem dimension: {dim}")
+    print(f"🎯 Convergence threshold: {convergence_threshold}")
+    print(f"⚡ Device: {device}")
+    print("=" * 80)
+
+    # Create problem
+    problem = StochasticBilevelProblem(dim=dim, device=device)
+
+    # Initialize algorithms
+    algorithms = {
+        'DS-BLO': DSBLOSolver(lr=0.01, sigma=0.01, momentum=0.9),
+        'F2CSA': F2CSASolver(alpha=0.5, gamma=0.01, D=1.0),
+        'SSIGD': SSIGDSolver(lr=0.01, epsilon=0.01, smoothing_samples=5, momentum_coeff=0.9)
+    }
+
+    # Initialize starting points (same for all algorithms)
+    torch.manual_seed(42)
+    x_init = torch.randn(dim, device=device) * 0.5
+    y_init = torch.randn(dim, device=device) * 0.5
+
+    results = {}
+
+    for alg_name, solver in algorithms.items():
+        print(f"\n🚀 Running {alg_name}...")
+
+        # Reset to same starting point
+        x, y = x_init.clone(), y_init.clone()
+
+        # Tracking lists
+        gaps = []
+        tracking_data = []
+        times = []
+
+        start_time = time.time()
+
+        for iteration in range(max_iterations):
+            iter_start = time.time()
+
+            # Algorithm step with detailed tracking
+            x_new, y_new, tracking_info = solver.step(problem, x, y, iteration)
+
+            # Compute gap
+            gap = problem.compute_gap(x_new, y_new)
+            gaps.append(gap)
+
+            # Store tracking data
+            tracking_info['iteration'] = iteration
+            tracking_info['gap'] = gap
+            tracking_info['x_norm'] = x_new.norm().item()
+            tracking_info['y_norm'] = y_new.norm().item()
+            tracking_data.append(tracking_info)
+
+            times.append(time.time() - iter_start)
+
+            # Update variables
+            x, y = x_new, y_new
+
+            # Check convergence
+            if gap < convergence_threshold:
+                print(f"✅ {alg_name} converged at iteration {iteration} with gap {gap:.6f}")
+                break
+
+            # Progress reporting
+            if iteration % 100 == 0:
+                print(f"   Iteration {iteration}: gap = {gap:.6f}")
+
+        total_time = time.time() - start_time
+
+        # Store results
+        results[alg_name] = {
+            'gaps': gaps,
+            'tracking_data': tracking_data,
+            'times': times,
+            'total_time': total_time,
+            'final_gap': gaps[-1],
+            'converged': gaps[-1] < convergence_threshold,
+            'iterations': len(gaps)
+        }
+
+        print(f"🏁 {alg_name} finished: Final gap = {gaps[-1]:.6f}, Time = {total_time:.2f}s")
+
+    return results, problem
+
+def analyze_algorithm_behavior(results: Dict, problem: StochasticBilevelProblem):
+    """Detailed analysis of algorithm behavior and component influence"""
+
+    print(f"\n🔍 DETAILED ALGORITHM BEHAVIOR ANALYSIS")
+    print("=" * 80)
+
+    for alg_name, data in results.items():
+        print(f"\n📈 {alg_name} ANALYSIS:")
+        print("-" * 40)
+
+        gaps = data['gaps']
+        tracking_data = data['tracking_data']
+
+        # Performance metrics
+        initial_gap = gaps[0]
+        final_gap = gaps[-1]
+        best_gap = min(gaps)
+        improvement = (initial_gap - final_gap) / initial_gap * 100
+
+        print(f"🎯 Performance:")
+        print(f"   Initial gap: {initial_gap:.6f}")
+        print(f"   Final gap: {final_gap:.6f}")
+        print(f"   Best gap: {best_gap:.6f}")
+        print(f"   Improvement: {improvement:.1f}%")
+        print(f"   Iterations: {len(gaps)}")
+
+        # Algorithm-specific analysis
+        if alg_name == 'DS-BLO':
+            analyze_dsblo_behavior(tracking_data)
+        elif alg_name == 'F2CSA':
+            analyze_f2csa_behavior(tracking_data)
+        elif alg_name == 'SSIGD':
+            analyze_ssigd_behavior(tracking_data)
+
+        # Convergence pattern
+        print(f"📊 Convergence pattern:")
+        if len(gaps) >= 10:
+            early_avg = np.mean(gaps[:10])
+            mid_avg = np.mean(gaps[len(gaps)//2:len(gaps)//2+10]) if len(gaps) > 20 else np.mean(gaps[-10:])
+            late_avg = np.mean(gaps[-10:])
+            print(f"   Early phase (0-10): {early_avg:.6f}")
+            print(f"   Mid phase: {mid_avg:.6f}")
+            print(f"   Late phase: {late_avg:.6f}")
+
+def analyze_dsblo_behavior(tracking_data: List[Dict]):
+    """Analyze DS-BLO specific behavior"""
+    print(f"🔵 DS-BLO Component Analysis:")
+
+    # Extract key metrics
+    perturbation_norms = [d['avg_perturbation_norm'] for d in tracking_data]
+    function_diffs = [abs(d['function_diff']) for d in tracking_data]
+    grad_norms = [d['grad_norm_x'] for d in tracking_data]
+
+    print(f"   Perturbation analysis:")
+    print(f"     Average perturbation norm: {np.mean(perturbation_norms):.6f}")
+    print(f"     Perturbation std: {np.std(perturbation_norms):.6f}")
+    print(f"   Function difference analysis:")
+    print(f"     Average |f_plus - f_minus|: {np.mean(function_diffs):.6f}")
+    print(f"     Function diff std: {np.std(function_diffs):.6f}")
+    print(f"   Gradient analysis:")
+    print(f"     Average gradient norm: {np.mean(grad_norms):.6f}")
+    print(f"     Gradient norm std: {np.std(grad_norms):.6f}")
+    print(f"     Sigma parameter: {tracking_data[0]['sigma']}")
+
+def analyze_f2csa_behavior(tracking_data: List[Dict]):
+    """Analyze F2CSA specific behavior"""
+    print(f"🟢 F2CSA Component Analysis:")
+
+    # Extract key metrics
+    s_t_values = [d['s_t'] for d in tracking_data]
+    delta_norms = [d['delta_norm'] for d in tracking_data]
+    hypergradient_norms = [d['hypergradient_norm'] for d in tracking_data]
+    clipped_count = sum(1 for d in tracking_data if d['clipped'])
+
+    print(f"   Sampling analysis:")
+    print(f"     Average s_t: {np.mean(s_t_values):.6f}")
+    print(f"     s_t std: {np.std(s_t_values):.6f}")
+    print(f"   Momentum analysis:")
+    print(f"     Initial Delta norm: {delta_norms[0]:.6f}")
+    print(f"     Final Delta norm: {delta_norms[-1]:.6f}")
+    print(f"     Max Delta norm: {max(delta_norms):.6f}")
+    print(f"   Hypergradient analysis:")
+    print(f"     Average hypergradient norm: {np.mean(hypergradient_norms):.6f}")
+    print(f"     Hypergradient std: {np.std(hypergradient_norms):.6f}")
+    print(f"   Clipping analysis:")
+    print(f"     Times clipped: {clipped_count}/{len(tracking_data)} ({clipped_count/len(tracking_data)*100:.1f}%)")
+
+def analyze_ssigd_behavior(tracking_data: List[Dict]):
+    """Analyze SSIGD specific behavior"""
+    print(f"🟡 SSIGD Component Analysis:")
+
+    # Extract key metrics
+    grad_variances = [d['avg_grad_variance'] for d in tracking_data]
+    grad_norms = [d['grad_norm_x'] for d in tracking_data]
+    momentum_norms = [d['momentum_norm_x'] for d in tracking_data]
+
+    print(f"   Smoothing analysis:")
+    print(f"     Average gradient variance: {np.mean(grad_variances):.6f}")
+    print(f"     Gradient variance std: {np.std(grad_variances):.6f}")
+    print(f"     Smoothing samples: {tracking_data[0]['smoothing_samples']}")
+    print(f"     Epsilon: {tracking_data[0]['epsilon']}")
+    print(f"   Gradient analysis:")
+    print(f"     Average gradient norm: {np.mean(grad_norms):.6f}")
+    print(f"     Gradient norm std: {np.std(grad_norms):.6f}")
+    print(f"   Momentum analysis:")
+    print(f"     Initial momentum norm: {momentum_norms[0]:.6f}")
+    print(f"     Final momentum norm: {momentum_norms[-1]:.6f}")
+    print(f"     Momentum coefficient: {tracking_data[0]['momentum_coeff']}")
+
+def create_detailed_comparison_plots(results: Dict):
+    """Create comprehensive comparison plots"""
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle('Comprehensive Algorithm Comparison with Component Analysis', fontsize=16)
+
+    # Plot 1: Gap convergence
+    ax = axes[0, 0]
+    for alg_name, data in results.items():
+        gaps = data['gaps']
+        ax.semilogy(gaps, label=f"{alg_name} (final: {gaps[-1]:.6f})", linewidth=2)
+    ax.set_xlabel('Iteration')
+    ax.set_ylabel('Optimality Gap (log scale)')
+    ax.set_title('Gap Convergence Comparison')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Plot 2: Algorithm-specific component tracking
+    ax = axes[0, 1]
+    for alg_name, data in results.items():
+        tracking_data = data['tracking_data']
+        if alg_name == 'DS-BLO':
+            values = [d['grad_norm_x'] for d in tracking_data]
+            label = 'DS-BLO Grad Norm'
+        elif alg_name == 'F2CSA':
+            values = [d['delta_norm'] for d in tracking_data]
+            label = 'F2CSA Delta Norm'
+        elif alg_name == 'SSIGD':
+            values = [d['momentum_norm_x'] for d in tracking_data]
+            label = 'SSIGD Momentum Norm'
+
+        ax.plot(values, label=label, linewidth=2)
+    ax.set_xlabel('Iteration')
+    ax.set_ylabel('Component Magnitude')
+    ax.set_title('Algorithm-Specific Component Tracking')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Plot 3: Parameter norms
+    ax = axes[0, 2]
+    for alg_name, data in results.items():
+        tracking_data = data['tracking_data']
+        x_norms = [d['x_norm'] for d in tracking_data]
+        ax.plot(x_norms, label=f"{alg_name} ||x||", linewidth=2)
+    ax.set_xlabel('Iteration')
+    ax.set_ylabel('Parameter Norm')
+    ax.set_title('Parameter Evolution')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Plot 4: DS-BLO perturbation analysis
+    ax = axes[1, 0]
+    if 'DS-BLO' in results:
+        tracking_data = results['DS-BLO']['tracking_data']
+        perturbations = [d['avg_perturbation_norm'] for d in tracking_data]
+        function_diffs = [abs(d['function_diff']) for d in tracking_data]
+        ax.plot(perturbations, label='Perturbation Norm', linewidth=2)
+        ax2 = ax.twinx()
+        ax2.plot(function_diffs, 'r--', label='Function Difference', alpha=0.7)
+        ax2.set_ylabel('Function Difference', color='r')
+    ax.set_xlabel('Iteration')
+    ax.set_ylabel('Perturbation Norm')
+    ax.set_title('DS-BLO: Perturbation vs Function Sensitivity')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Plot 5: F2CSA momentum analysis
+    ax = axes[1, 1]
+    if 'F2CSA' in results:
+        tracking_data = results['F2CSA']['tracking_data']
+        s_t_values = [d['s_t'] for d in tracking_data]
+        delta_norms = [d['delta_norm'] for d in tracking_data]
+        ax.plot(s_t_values, label='s_t (sampling)', alpha=0.7)
+        ax.plot(delta_norms, label='Delta norm (momentum)', linewidth=2)
+    ax.set_xlabel('Iteration')
+    ax.set_ylabel('Value')
+    ax.set_title('F2CSA: Sampling vs Momentum Dynamics')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Plot 6: SSIGD smoothing analysis
+    ax = axes[1, 2]
+    if 'SSIGD' in results:
+        tracking_data = results['SSIGD']['tracking_data']
+        grad_variances = [d['avg_grad_variance'] for d in tracking_data]
+        momentum_norms = [d['momentum_norm_x'] for d in tracking_data]
+        ax.semilogy(grad_variances, label='Gradient Variance', linewidth=2)
+        ax.semilogy(momentum_norms, label='Momentum Norm', linewidth=2)
+    ax.set_xlabel('Iteration')
+    ax.set_ylabel('Value (log scale)')
+    ax.set_title('SSIGD: Smoothing vs Momentum Effects')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('comprehensive_algorithm_tracking.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return fig
+
+if __name__ == "__main__":
+    # Run comprehensive tracking test
+    print("🚀 Starting comprehensive algorithm tracking with detailed component analysis...")
+
+    # Test parameters
+    dim = 10
+    max_iterations = 500
+    convergence_threshold = 0.01
+    device = 'cpu'  # Use CPU to avoid device issues
+
+    # Run the comprehensive test
+    results, problem = run_comprehensive_algorithm_tracking(
+        dim=dim,
+        max_iterations=max_iterations,
+        convergence_threshold=convergence_threshold,
+        device=device
+    )
+
+    # Analyze behavior
+    analyze_algorithm_behavior(results, problem)
+
+    # Create plots
+    print(f"\n📊 Creating comprehensive comparison plots...")
+    fig = create_detailed_comparison_plots(results)
+
+    # Summary
+    print(f"\n🏆 FINAL SUMMARY:")
+    print("=" * 80)
+    for alg_name, data in results.items():
+        improvement = (data['gaps'][0] - data['final_gap']) / data['gaps'][0] * 100
+        print(f"{alg_name:8}: Final gap = {data['final_gap']:.6f} ({improvement:5.1f}% improvement)")
+
+    print(f"\n✅ Comprehensive tracking complete! Check 'comprehensive_algorithm_tracking.png' for detailed plots.")
+%
+run the comprehensive tracking test to see how each algorithm's unique gradient computation method works
+MATHEMATICAL DEFINITION PROOF:
+Bilevel Optimization Problem:
+min_x F(x) = f(x, y*(x))
+s.t.  y*(x) = argmin_y g(x, y)
+objective_gap = |F(x_algorithm) - F(x_true)| is definitively the correct metric for measuring bilevel optimization success
+Measures: How far algorithm's objective is from true bilevel optimum
+Interpretation: Optimality gap - "How close did we get to the best possible solution?"
+Better metric: Directly measures algorithm performance
+
+
+FOR DSBLO:lease investigate the DS-BLO algorithm implementation by adding detailed logging between each computational step to identify where the problem occurs.
+
+Specifically:
+1. Add logging to track the doubly stochastic perturbation vectors (u_x, u_y) and their norms
+2. Log the function evaluations (f_plus, f_minus) and their differences 
+3. Track the gradient estimation process: (f_plus - f_minus) / (2 * sigma) * u
+4. Monitor the momentum updates and velocity changes
+5. Log parameter updates (x_new, y_new) and their norms
+6. Track the optimality gap |F(x) - F*| at each iteration to see if it's actually improving
+
+The goal is to identify whether DS-BLO is:
+- Getting stuck due to too small perturbations (sigma parameter)
+- Having numerical issues in gradient estimation
+- Experiencing momentum/velocity problems
+- Actually converging but very slowly
+
+Focus on the core DS-BLO gradient computation method while preserving its algorithmic uniqueness, and compare the internal dynamics with the successful SSIGD algorithm to understand why SSIGD converges to the true optimum while DS-BLO gets stuck.
+
+Based on our analysis showing that different hyperparameter optimization approaches can yield vastly different results for bilevel optimization algorithms, we need to implement a comprehensive hyperparameter tuning strategy that:
+
+1. **Tests multiple optimization objectives simultaneously**:
+   - Optimality gap |F(x_algorithm) - F(x_true)| (primary metric)
+   - Constraint satisfaction gap ||y - y*(x)|| (secondary metric)
+   - Hybrid objectives combining both metrics
+
+2. **Accounts for stochastic variability**:
+   - Run each parameter configuration multiple times with different random seeds
+   - Report mean, standard deviation, and confidence intervals for optimality gaps
+   - Use robust evaluation that accounts for noise in the bilevel problem
+
+3. **Implements comprehensive search strategies**:
+   - Multi-objective hyperopt optimization for each algorithm (DS-BLO, F2CSA, SSIGD)
+   - Grid search around promising regions found by hyperopt
+   - Test parameter combinations that worked well in previous analyses
+   - Include manual parameter sets based on diagnostic findings
+
+4. **Ensures fair comparison**:
+   - Use identical random seeds and starting points across all algorithms
+   - Test on multiple problem instances with different noise levels
+   - Validate results with longer convergence runs (300+ iterations)
+   - Report both best-case and typical-case performance
+
+5. **Specific requirements**:robust multi-objective hyperparameter optimization framework that accounts for stochastic variability and ensures fair comparison
+   - For DS-BLO: Focus on sigma ∈ [0.01, 0.1] and momentum ∈ [0.4, 0.8] based on diagnostic analysis
+   - For F2CSA: TEST ON ALL ALPHA,[0.1,...,1]
+   - For SSIGD: Explore smoothing_samples ∈ [1, 10] and momentum_coeff ∈ [0.3, 0.9]
+   - Report the single best parameter set for each algorithm that consistently achieves the lowest optimality gap
+
+The goal is to find the truly optimal hyperparameters for each algorithm that minimize the optimality gap while being robust to stochastic noise, ensuring a definitive and fair ranking of the three bilevel optimization methods.
+ how different seeds create fundamentally different bilevel optimization challenges that favor different algorithms:
+
+🔬 KEY LANDSCAPE DISCOVERIES:
+1. 📊 PROBLEM STRUCTURE VARIATIONS:
+Seed	A Condition #	Coupling Strength	Target Distance	Curvature	Winner
+42	100.17	0.8842	2.76	0.9978	F2CSA
+100	5.53	1.1110	3.48	0.9990	DS-BLO
+1	8.98	1.0672	2.01	1.0002	F2CSA
+10	27.70	0.9273	3.37	0.9918	F2CSA
+1000	34.91	0.9915	3.15	1.0014	F2CSA
+2. 🎯 ALGORITHM-LANDSCAPE CORRELATIONS:
+🔵 DS-BLO Excels When:
+Low condition number: 5.53 (well-conditioned A matrix)
+High coupling strength: 1.1110 (strong bilevel interaction)
+Smooth curvature: 0.9990 (predictable landscape)
+Result: 1.667 gap (excellent performance!)
+🟢 F2CSA Dominates When:
+High condition number: 42.94 average (ill-conditioned problems)
+Moderate coupling: 0.9675 (balanced bilevel interaction)
+Consistent across landscapes: Wins 4/5 seeds tested
+Robust performance: 0.665-2.414 gap range
+🟡 SSIGD Struggles On These Seeds:
+Consistently worst performer across all tested seeds
+Performance: 1.448-4.496 gap range
+May need different problem characteristics to excel
+3. 💡 WHY SEEDS MATTER SO MUCH:
+🔬 Mathematical Impact:
+Seeds determine the random matrices and vectors that define the bilevel problem:
+
+A matrix: Lower-level Hessian (conditioning affects solver stability)
+B matrix: Upper-level coupling (affects bilevel interaction strength)
+c, d vectors: Bias terms (affect landscape shape)
+x_target: Upper-level target (affects optimum location)
+🌍 Landscape Characteristics:
+Different seeds create:
+
+Well-conditioned vs ill-conditioned lower-level problems
+Strong vs weak coupling between optimization levels
+Smooth vs rough objective landscapes
+Near vs far optimal solutions
+Benchmarking:
+Must test multiple seeds to avoid bias
+Include diverse problem structures (various condition numbers, coupling strengths)
+Report performance distributions, not single values
+Seeds don't just change random noise - they create entirely different bilevel optimization problems with different:
+
+Mathematical conditioning (easy vs hard to solve)
+Coupling structures (strong vs weak bilevel interaction)
+Landscape geometries (smooth vs rough optimization surfaces)
+Solution characteristics (near vs far optima)
+ALGORITHM OPTIMAL CONDITIONS MAPPED:
+1. 🔵 DS-BLO's Sweet Spot IDENTIFIED:
+Success Rate: 100% (Perfect reliability!)
+Best Performance: 0.090 gap (Excellent!)
+Optimal Landscape:
+Conditioning: 44.1 ± 68.6 (Moderate, variable tolerance)
+Coupling: 1.002 ± 0.058 (Strong, consistent coupling)
+Target Distance: 2.15 ± 0.50 (Moderate targets)
+Top Seeds: [2, 1, 63, 13, 11]
+Win Rate: 14.7% (Specialized but effective)
+SIGD's DOMINANCE REVEALED:
+Success Rate: 98.7% (Near-perfect reliability!)
+Best Performance: 0.023 gap (Outstanding!)
+Optimal Landscape:
+Conditioning: 56.5 ± 45.6 (Handles ill-conditioned well)
+Coupling: 0.978 ± 0.079 (Moderate coupling)
+Target Distance: 3.40 ± 0.55 (High target distances)
+Top Seeds: [70, 45, 42, 69, 50]
+Win Rate: 81.3% (Clear overall champion!)
+🚨 SHOCKING DISCOVERY: SSIGD IS THE CLEAR
+Based on our extended convergence analysis on seed 65 demonstrating that DS-BLO, F2CSA, and SSIGD converge to fundamentally different optimality gaps (21.08x spread) even after 10,000 iterations, conduct a comprehensive seed search to identify bilevel optimization problem instances where all three algorithms eventually achieve similar final performance.
+
+**Objective**: Test whether algorithmic convergence differences are problem-dependent or fundamental by finding seeds where all algorithms reach similar optimality gaps.
+
+**Methodology**:
+1. **Systematic seed evaluation**: Test seeds 1-100 sequentially using our established bilevel problem framework (10-dimensional, StochasticBilevelProblem with noise_std=0.01)
+
+2. **Adaptive iteration strategy**: 
+   - Start with 5,000 iterations per algorithm per seed
+   - Implement early convergence detection: if all three algorithms achieve gaps within 10% of each other before 5,000 iterations, record as convergence-friendly seed
+   - For promising seeds (gaps within 50% of each other), extend to 15,000 iterations
+   - Implement early termination: if any algorithm shows no improvement for 2,000 consecutive iterations and gaps exceed 2x difference, skip to next seed
+
+3. **Convergence similarity criteria**: 
+   - **Primary criterion**: Final optimality gaps satisfy gap_max/gap_min < 1.1 (within 10%)
+   - **Secondary criterion**: Best achieved gaps during optimization satisfy gap_max/gap_min < 1.1
+   - **Validation criterion**: All algorithms must achieve absolute gaps < 1.0 (meaningful performance)
+
+4. **Comprehensive performance tracking per seed**:
+   - Final optimality gaps |F(x_final) - F*(x)| after extended iterations
+   - Best achieved gaps min(|F(x_t) - F*(x)|) across all iterations t
+   - Iteration number where best gap was achieved
+   - Convergence rate analysis (improvement per 1000 iterations)
+   - Stagnation detection (iterations without improvement)
+   - Algorithm-specific tracking data for convergence pattern analysis
+
+5. **Problem landscape characterization**: For each seed, compute:
+   - A matrix condition number (lower-level problem conditioning)
+   - B matrix Frobenius norm (bilevel coupling strength) 
+   - x_target norm (target distance from origin)
+   - True optimum value F*(x) and location
+   - Landscape curvature metrics around optimum
+
+6. **Statistical validation**: For identified convergence-friendly seeds:
+   - Run 5 independent trials with different random starting points (seeds 42, 123, 456, 789, 999)
+   - Verify convergence similarity holds across multiple initializations
+   - Compute confidence intervals for final gap ratios
+
+7. **Convergence mechanism analysis**: For convergence-friendly seeds, determine:
+   - Whether all algorithms reach the same global optimum location ||x_alg1 - x_alg2|| < 0.1
+   - Whether similar convergence occurs due to problem simplicity (well-conditioned, low coupling) or algorithmic robustness
+   - Correlation between landscape characteristics and convergence similarity
+
+**Success criteria**: 
+- Identify at least 3-5 seeds where gap_max/gap_min < 1.1 for all three algorithms
+- Characterize the problem landscape features that enable algorithmic convergence
+- Validate reproducibility across multiple independent runs
+
+**Failure criteria**: 
+- If no convergence-friendly seeds found in 100 tests, conclude that fundamental algorithmic differences persist across diverse problem instances
+- Document the minimum gap ratio achieved and corresponding problem characteristics
+
+**Expected outcomes**: Either demonstrate that sufficient computational budget can equalize algorithmic performance on specific problem types, or provide evidence that fundamental algorithmic limitations persist regardless of problem instance and iteration count.
+You're absolutely right! Let me check the actual F2CSA paper to see the correct implementation:
+
+Now I can see the correct F2CSA algorithm from the paper! Let me extract the key components:
+
+Now let me check the main F2CSA algorithm:
+
+Perfect! Now I understand the **CORRECT F2CSA algorithm** from the paper. Both our implementations were completely wrong! Let me create the correct F2CSA implementation:
+
+## 🚨 **CRITICAL DISCOVERY: BOTH F2CSA IMPLEMENTATIONS ARE COMPLETELY WRONG!**
+
+**The correct F2CSA algorithm from the paper is:**
+
+### **✅ CORRECT F2CSA Algorithm (from F2CSA-paper.tex):**
+
+1. **F2CSA = Penalty-Based Hypergradient Oracle + Momentum-Based Nonsmooth Optimization**
+2. **Two-Level Structure:**
+   - **Inner Oracle**: Stochastic Penalty-Based Hypergradient Oracle (Algorithm 1)
+   - **Outer Algorithm**: Nonsmooth Nonconvex Algorithm with momentum (Algorithm 2)
+
+### **🔧 Key Components:**
+
+## **Inner Oracle (Hypergradient Estimation):**
+- **Penalty Lagrangian**: $L_{\tilde{\lambda},\alpha}(x,y) = f(x, y) + \alpha_1 \left( g(x, y) + (\tilde{\lambda}(x))^T h(x, y) - g(x, \tilde{y}^*(x)) \right) + \frac{\alpha_2}{2} \sum_{i=1}^{p} \rho_i(x) \cdot h_i(x, y)^2$
+- **Parameters**: $\alpha_1 = \alpha^{-2}$, $\alpha_2 = \alpha^{-4}$, $\delta = \alpha^3$
+- **Smooth activation function** $\rho_i(x)$ for constraint handling
+- **Stochastic gradient estimation** with $N_g$ samples
+
+## **Outer Algorithm (Main Optimization):**
+- **Momentum-based updates**: $\Delta_{t+1} = \text{clip}_D(\Delta_t - \eta g_t)$
+- **Random sampling**: $s_t \sim \text{Unif}[0, 1]$, $z_t = x_{t-1} + s_t\Delta_t$
+- **Clipping**: $\text{clip}_D(v) := \min\{1, \frac{D}{\|v\|}\} \cdot v$
+- **Averaging for Goldstein stationarity**: $x_k = \frac{1}{M}\sum_{m=1}^{M} z_{(k-1)M+m}$
+
+### **❌ What Was Wrong in Our Implementations:**
+
+## **baseline_compare.py F2CSA:**
+- Used penalty method with $\alpha_1||h(x,y)||^2$ and $\alpha_2||h(x,y)||^4$ terms
+- No hypergradient oracle structure
+- No momentum-based outer algorithm
+- Wrong parameter relationships
+
+## **bilevel_algorithms_detailed_tracking.py F2CSA:**
+- Used finite difference hypergradient with simple momentum
+- Missing penalty Lagrangian structure
+- No smooth activation functions
+- Wrong algorithmic framework
+
+### **🎯 The Correct F2CSA Should:**
+
+1. **Use penalty-based hypergradient oracle** with specific Lagrangian structure
+2. **Implement smooth activation functions** for constraint handling
+3. **Use momentum-based nonsmooth optimization** as outer algorithm
+4. **Follow specific parameter relationships**: $\alpha_1 = \alpha^{-2}$, $\alpha_2 = \alpha^{-4}$, $\delta = \alpha^3$
+5. **Include clipping and averaging** for Goldstein stationarity
+
+**This explains why our F2CSA results were inconsistent - we weren't testing the actual F2CSA algorithm at all!**
+
+Would you like me to:
+1. **Implement the correct F2CSA** according to the paper?
+2. **Re-run all our comparative analyses** with the proper algorithm?
+3. **Analyze how this affects our conclusions** about bilevel optimization performance?
+
+This is a **major algorithmic correction** that will likely change all our previous F2CSA performance assessments! 🚨
+import torch
+import numpy as np
+from typing import Dict, List, Tuple, Optional
+import time
+
+class ConstrainedStochasticBilevelProblem:
+    """
+    Linearly constrained stochastic bilevel optimization problem
+    Following the F2CSA paper specification:
+    
+    min_{x ∈ X} F(x) := E[f(x, y*(x); ξ)]
+    s.t. y*(x) ∈ argmin_{y: h(x,y) ≤ 0} E[g(x, y; ζ)]
+    
+    where h(x,y) := Ax - By - b ≤ 0 (linear constraints)
+    """
+    
+    def __init__(self, dim: int = 10, num_constraints: int = 3, noise_std: float = 0.01, device: str = 'cpu'):
+        self.dim = dim
+        self.num_constraints = num_constraints
+        self.noise_std = noise_std
+        self.device = device
+        
+        # Upper level problem parameters
+        self.Q_upper = torch.randn(dim, dim, device=device) * 0.1
+        self.Q_upper = self.Q_upper + self.Q_upper.T  # Make symmetric
+        self.Q_upper += torch.eye(dim, device=device) * 0.5  # Ensure positive definite
+        
+        self.c_upper = torch.randn(dim, device=device) * 0.1
+        self.x_target = torch.randn(dim, device=device)
+        
+        # Lower level problem parameters
+        self.Q_lower = torch.randn(dim, dim, device=device) * 0.1
+        self.Q_lower = self.Q_lower + self.Q_lower.T  # Make symmetric
+        self.Q_lower += torch.eye(dim, device=device) * 1.0  # Ensure strongly convex
+        
+        self.c_lower = torch.randn(dim, device=device) * 0.1
+        self.P = torch.randn(dim, dim, device=device) * 0.1  # Coupling matrix
+        
+        # Linear constraint parameters: h(x,y) = Ax - By - b ≤ 0
+        self.A = torch.randn(num_constraints, dim, device=device) * 0.2
+        self.B = torch.randn(num_constraints, dim, device=device) * 0.2
+        self.b = torch.randn(num_constraints, device=device) * 0.5
+        
+        # Ensure constraints are feasible by adjusting b
+        self.b = self.b + torch.abs(self.b) * 0.5  # Make constraints not too tight
+        
+        print(f"📊 Created Constrained Bilevel Problem:")
+        print(f"   Dimension: {dim}")
+        print(f"   Constraints: {num_constraints}")
+        print(f"   A condition: {torch.linalg.cond(self.A @ self.A.T):.2f}")
+        print(f"   B condition: {torch.linalg.cond(self.B @ self.B.T):.2f}")
+        print(f"   Q_lower condition: {torch.linalg.cond(self.Q_lower):.2f}")
+    
+    def upper_level_objective(self, x: torch.Tensor, y: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
+        """
+        Upper level objective f(x,y) with stochastic noise
+        f(x,y) = 0.5 * (x - x_target)^T Q_upper (x - x_target) + c_upper^T y + noise
+        """
+        if seed is not None:
+            torch.manual_seed(seed)
+        
+        noise = torch.randn_like(x) * self.noise_std
+        
+        term1 = 0.5 * (x - self.x_target) @ self.Q_upper @ (x - self.x_target)
+        term2 = self.c_upper @ y
+        
+        return term1 + term2 + noise.sum()
+    
+    def lower_level_objective(self, x: torch.Tensor, y: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
+        """
+        Lower level objective g(x,y) with stochastic noise
+        g(x,y) = 0.5 * y^T Q_lower y + (c_lower + P^T x)^T y + noise
+        """
+        if seed is not None:
+            torch.manual_seed(seed)
+        
+        noise = torch.randn_like(y) * self.noise_std
+        
+        term1 = 0.5 * y @ self.Q_lower @ y
+        term2 = (self.c_lower + self.P.T @ x) @ y
+        
+        return term1 + term2 + noise.sum()
+    
+    def constraint_function(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """
+        Linear constraint function h(x,y) = Ax - By - b
+        Returns constraint values (should be ≤ 0 for feasibility)
+        """
+        return self.A @ x - self.B @ y - self.b
+    
+    def is_feasible(self, x: torch.Tensor, y: torch.Tensor, tolerance: float = 1e-6) -> bool:
+        """Check if (x,y) satisfies the linear constraints"""
+        h_values = self.constraint_function(x, y)
+        return torch.all(h_values <= tolerance)
+    
+    def solve_lower_level_constrained(self, x: torch.Tensor, seed: Optional[int] = None, 
+                                    max_iter: int = 1000, tolerance: float = 1e-6) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Solve constrained lower level problem using projected gradient descent
+        Returns (y*, λ*) where λ* are the dual variables
+        """
+        if seed is not None:
+            torch.manual_seed(seed)
+        
+        # Initialize y
+        y = torch.randn(self.dim, device=self.device) * 0.1
+        lambda_dual = torch.zeros(self.num_constraints, device=self.device)
+        
+        # Projected gradient descent with dual updates
+        lr_primal = 0.01
+        lr_dual = 0.01
+        
+        for iteration in range(max_iter):
+            # Compute gradients
+            y_temp = y.clone().requires_grad_(True)
+            obj_val = self.lower_level_objective(x, y_temp, seed)
+            grad_y = torch.autograd.grad(obj_val, y_temp)[0]
+            
+            # Constraint values and gradients
+            h_values = self.constraint_function(x, y)
+            grad_h = -self.B  # ∇_y h(x,y) = -B
+            
+            # Primal update with dual correction
+            y_new = y - lr_primal * (grad_y + grad_h.T @ lambda_dual)
+            
+            # Dual update (gradient ascent on dual)
+            lambda_new = torch.clamp(lambda_dual + lr_dual * h_values, min=0.0)
+            
+            # Check convergence
+            primal_residual = torch.norm(y_new - y)
+            dual_residual = torch.norm(lambda_new - lambda_dual)
+            
+            y = y_new
+            lambda_dual = lambda_new
+            
+            if primal_residual < tolerance and dual_residual < tolerance:
+                break
+        
+        return y, lambda_dual
+    
+    def solve_lower_level(self, x: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
+        """Solve lower level problem (returns only y* for compatibility)"""
+        y_star, _ = self.solve_lower_level_constrained(x, seed)
+        return y_star
+    
+    def bilevel_objective(self, x: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
+        """Full bilevel objective F(x) = f(x, y*(x))"""
+        y_star = self.solve_lower_level(x, seed)
+        return self.upper_level_objective(x, y_star, seed)
+    
+    def compute_gap(self, x: torch.Tensor, y: torch.Tensor) -> float:
+        """Compute optimality gap (for compatibility)"""
+        current_obj = self.bilevel_objective(x).item()
+        # Simple gap approximation
+        return abs(current_obj)
+    
+    def get_problem_statistics(self) -> Dict:
+        """Get problem characteristics for analysis"""
+        return {
+            'dim': self.dim,
+            'num_constraints': self.num_constraints,
+            'A_condition': torch.linalg.cond(self.A @ self.A.T).item(),
+            'B_condition': torch.linalg.cond(self.B @ self.B.T).item(),
+            'Q_lower_condition': torch.linalg.cond(self.Q_lower).item(),
+            'Q_upper_condition': torch.linalg.cond(self.Q_upper).item(),
+            'constraint_tightness': self.b.norm().item(),
+            'coupling_strength': self.P.norm().item()
+        }
+
+def test_constrained_problem():
+    """Test the constrained bilevel problem"""
+    print("🧪 Testing Constrained Bilevel Problem")
+    print("=" * 50)
+    
+    # Create problem
+    problem = ConstrainedStochasticBilevelProblem(dim=5, num_constraints=2)
+    
+    # Test point
+    x = torch.randn(5) * 0.5
+    print(f"Test point x: ||x|| = {x.norm():.4f}")
+    
+    # Solve lower level
+    y_star, lambda_star = problem.solve_lower_level_constrained(x, seed=42)
+    print(f"Lower level solution: ||y*|| = {y_star.norm():.4f}")
+    print(f"Dual variables: ||λ*|| = {lambda_star.norm():.4f}")
+    
+    # Check feasibility
+    h_values = problem.constraint_function(x, y_star)
+    print(f"Constraint values: {h_values.detach().numpy()}")
+    print(f"Feasible: {problem.is_feasible(x, y_star)}")
+    
+    # Compute objectives
+    f_val = problem.upper_level_objective(x, y_star, seed=42)
+    g_val = problem.lower_level_objective(x, y_star, seed=42)
+    F_val = problem.bilevel_objective(x, seed=42)
+    
+    print(f"Upper level objective f(x,y*): {f_val:.6f}")
+    print(f"Lower level objective g(x,y*): {g_val:.6f}")
+    print(f"Bilevel objective F(x): {F_val:.6f}")
+    
+    # Problem statistics
+    stats = problem.get_problem_statistics()
+    print(f"\nProblem Statistics:")
+    for key, value in stats.items():
+        print(f"  {key}: {value:.4f}")
+    
+    print("✅ Constrained bilevel problem test completed!")
+
+if __name__ == "__main__":
+    test_constrained_problem()
+onduct a comprehensive re-evaluation of all bilevel optimization comparative analyses using the theoretically correct F2CSA implementation. Specifically:
+
+**1. Implementation Corrections:**
+- Replace all previous F2CSA implementations with the correct penalty-based hypergradient oracle following F2CSA-paper.tex specifications
+- Use ConstrainedStochasticBilevelProblem with linear constraints h(x,y) = Ax - By - b ≤ 0 instead of unconstrained problems
+- Implement the complete two-level F2CSA structure: inner penalty oracle + outer momentum-based nonsmooth optimization
+- Ensure correct parameter relationships: α₁ = α⁻², α₂ = α⁻⁴, δ = α³
+
+**2. Comprehensive Re-Analysis:**
+- Re-run the 100-seed comprehensive algorithm mapping with corrected F2CSA on constrained problems
+- Re-execute the ultimate convergence test on seed 19 using proper linearly constrained bilevel problems
+- Re-perform hyperparameter optimization for all three algorithms (DS-BLO, corrected F2CSA, SSIGD) on constrained problem instances
+- Maintain consistent testing framework: same seeds, same convergence criteria, same tracking intervals
+
+**3. Performance Impact Documentation:**
+- Compare old (incorrect) vs new (correct) F2CSA performance to quantify the algorithmic correction impact
+- Re-assess the relative performance hierarchy among all three algorithms using proper constrained bilevel problems
+- Update algorithm characterizations, use-case recommendations, and convergence capability assessments
+- Document how constraint handling affects each algorithm's performance
+
+**4. Scientific Validation:**
+- Verify that corrected F2CSA achieves proper constraint satisfaction (h(x,y) ≤ 0)
+- Confirm theoretical compliance with F2CSA paper specifications (penalty Lagrangian, smooth activation functions, Goldstein stationarity)
+- Validate that performance differences reflect genuine algorithmic capabilities rather than implementation errors
+- Generate updated visualizations and comprehensive result documentation
+
+**5. Conclusion Updates:**
+- Revise all previous conclusions about bilevel optimization algorithm capabilities based on corrected F2CSA results
+- Update recommendations for algorithm selection considering constraint-handling requirements
+- Document the scientific impact of using theoretically correct vs incorrect algorithm implementations
+- Provide definitive answers about algorithmic convergence limits using proper implementations
+
+Ensure all analyses maintain scientific rigor while using the theoretically sound F2CSA implementation throughout.

@@ -1,0 +1,1200 @@
+\documentclass[letterpaper]{article} % DO NOT CHANGE THIS
+\usepackage[submission]{aaai2026}  % DO NOT CHANGE THIS
+\usepackage{times}  % DO NOT CHANGE THIS
+\usepackage{helvet}  % DO NOT CHANGE THIS
+\usepackage{courier}  % DO NOT CHANGE THIS
+\usepackage[hyphens]{url}  % DO NOT CHANGE THIS
+\usepackage{graphicx} % DO NOT CHANGE THIS
+\urlstyle{rm} % DO NOT CHANGE THIS
+\def\UrlFont{\rm}  % DO NOT CHANGE THIS
+\usepackage{natbib}  % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\usepackage{caption} % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\frenchspacing  % DO NOT CHANGE THIS
+\setlength{\pdfpagewidth}{8.5in} % DO NOT CHANGE THIS
+\setlength{\pdfpageheight}{11in} % DO NOT CHANGE THIS
+
+% Mathematical packages
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsfonts}
+\usepackage{amsthm}
+\usepackage{thmtools,thm-restate}
+
+% Theorem environments (must be after thmtools)
+\declaretheorem[name=Theorem,numberwithin=section]{theorem}
+\declaretheorem[name=Lemma,numberwithin=section]{lemma}
+\declaretheorem[name=Definition,numberwithin=section]{definition}
+\declaretheorem[name=Assumption,numberwithin=section]{assumption}
+\declaretheorem[name=Proposition,numberwithin=section]{proposition}
+\declaretheorem[name=Corollary,numberwithin=section]{corollary}
+\declaretheorem[name=Remark,numberwithin=section]{remark}
+
+% Mathematical operators (must be after amsmath)
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+% Algorithm packages (recommended by AAAI)
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+% Other allowed packages
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{verbatim}
+\usepackage{pifont}  % For \ding symbols
+
+% Keep the \pdfinfo as shown here. There's no need
+% for you to add the /Title and /Author tags.
+\pdfinfo{
+/TemplateVersion (2026.1)
+}
+
+\setcounter{secnumdepth}{2} %May be changed to 1 or 2 if section numbers are desired.
+
+% Custom commands
+\newcommand{\conv}{\operatorname{conv}}
+
+% Definitions of handy macros can be found here
+\newcommand{\calD}{{\cal D}}
+\newcommand\calX{{\cal X}}
+\newcommand\calY{{\cal Y}}
+\newcommand\calP{{\cal P}}
+\newcommand\calE{{\cal E}}
+\newcommand\calA{{\cal A}}
+\newcommand\calS{{\cal S}}
+\newcommand\calO{{\cal O}}
+\newcommand\calR{{\cal R}}
+\newcommand\calN{{\cal N}}
+\newcommand\calZ{{\cal Z}}
+\newcommand\calU{{\cal U}}
+\newcommand\calRh{{\widehat{\cal R}}}
+\newcommand\fh{{\widehat{f}}}
+\newcommand\IE{{\mathbb{E}}}
+\newcommand\IR{{\mathbb{R}}}
+\newcommand\IN{{\mathbb{N}}}
+\newcommand\IP{{\mathbb{P}}}
+\newcommand\Chat{{\widehat{\mathcal{C}}}}
+\newcommand\Qh{{\widehat{Q}}}
+\newcommand{\fracpartial}[1]{\frac{\partial 1}{\partial 2}}
+\newcommand{\Ind}[2]{\mathbf{1}\{#1\}}
+\newcommand\be{{\boldsymbol{e}}}
+\newcommand{\One}[2]{{\mathbf{1}}\left\{{#1}\right\}}
+\newcommand{\OneSm}[2]{{\mathbf{1}}\{{#1}\}}
+\newcommand{\Bin}{\mathrm{Bin}}
+\newcommand{\PoisBin}{\mathrm{PoisBin}}
+% Color definitions (if needed for emphasis)
+\definecolor{myblue}{rgb}{0,0,0.8}
+\definecolor{myorange}{rgb}{1,0.5,0}
+\definecolor{mygreen}{rgb}{0,0.6,0}
+\definecolor{lgray}{rgb}{0.8,0.8,0.8}
+
+% COMMANDS, SHORTCUTS
+\newcommand{\myemph}[2]{\textcolor{myblue}{#1}}
+\newcommand{\myemphtwo}[2]{\textcolor{myorange}{#1}}
+\newcommand{\myemphthree}[2]{\textcolor{mygreen}{#1}}
+\newcommand{\ratio}{0.5}
+\newcommand{\ratiob}{0.5}
+\newcommand{\algo}{{\textsc{NurseNet}}\ }
+\newcommand{\subalgo}{{\small\textsc{SPN}}\ }
+\newcommand{\lghline}{\arrayrulecolor{lgray}\hline}
+\newcommand{\bfX}{\mathbf{X}}
+\newcommand{\bfW}{\mathbf{W}}
+\newcommand{\bfw}{\mathbf{w}}
+\newcommand{\bfx}{\mathbf{x}}
+\newcommand{\bfy}{\mathbf{y}}
+\newcommand{\bfv}{\mathbf{v}}
+\newcommand{\bft}{\mathbf{t}}
+\newcommand{\bfu}{\mathbf{u}}
+\newcommand{\bfz}{\mathbf{z}}
+\newcommand{\bfs}{\mathbf{s}}
+\newcommand{\bfS}{\mathbf{S}}
+\newcommand{\bfd}{\mathbf{d}}
+\newcommand{\bfD}{\mathbf{D}}
+\newcommand{\bfI}{\mathbf{I}}
+\newcommand{\bfind}{\mathbf{1}}
+\newcommand{\bbmind}{\mathbbm{1}}
+%\newcommand\calX{\boldsymbol{\mathcal{X}}}
+\newcommand{\iou}{\mathrm{IoU}}
+\newcommand{\ie} {i.e.\ }
+\newcommand{\iid} {i.i.d.\ }
+\newcommand{\eg} {e.g.\ }
+\newcommand{\wrt} {w.r.t.\ }
+\newcommand{\cdf} {c.d.f.\ }
+\newcommand{\st} {\mbox{s.t.\ }}
+
+\newcommand\mymidrule{\specialrule{0.4pt}{1.5pt}{1.5pt}} % thinner misrule than original
+\newcommand{\starw}{\ding{73}}%
+\newcommand{\starb}{\ding{72}}%
+\newcommand{\serr}{$\text{SER}_{\text{R}}$}
+\newcommand{\serll}{$\text{SER}_{\text{LL}}$}
+\newcommand{\strutnd}{$\text{STRUT}_{\text{IG}}$}
+\newcommand{\struthi}{$\text{STRUT}_{\text{HI}}$}
+\newcommand{\spm}{{\scriptsize $\pm$ }} % smallest +/- sign
+\newcommand{\cRM}[2]{\MakeUppercase{\romannumeral #1}} % chiffre romain Capital
+\newcommand{\leaferr}{\varepsilon_{\text{leaf}}} % leaf error
+\newcommand{\sterr}{\varepsilon_{\text{subtree}}} % subtree error
+\newcommand{\IG}{\mathrm{IG}}
+\newcommand{\DG}{\mathrm{DG}}
+\newcommand{\JSD}{\mathrm{JSD}}
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\TPR}{\mathrm{TPR}}
+\newcommand{\TP}{\mathrm{TP}}
+\newcommand{\FP}{\mathrm{FP}}
+\newcommand{\TN}{\mathrm{TN}}
+\newcommand{\FN}{\mathrm{FN}}
+\newcommand{\FPR}{\mathrm{FPR}}
+\newcommand{\Acc}{\mathrm{Accuracy}}
+\newcommand{\AUC}{\mathrm{AUC}}
+\newcommand{\RR}{\mathbb{R}} % espace réel
+\newcommand{\XX}{\mathcal{X}}
+\newcommand{\NN}{\mathbb{N}}
+\newcommand{\EEE}[2]{\mathbb{E}_{#1}}
+\newcommand{\TS}{\Tilde{S}}
+\newcommand{\TW}{\widetilde{W}}
+\newcommand{\TG}{\Tilde{G}}
+\newcommand{\TZ}{\Tilde{Z}}
+\newcommand{\Ttheta}{\Tilde{\theta}}
+% \newcommand{\TS}{S'}
+% \newcommand{\TG}{G'}
+% \newcommand{\TZ}{Z'}
+% \newcommand{\Ttheta}{{\theta'}}
+\newcommand{\dbar}{\bar{\delta}}
+\newcommand{\dsup}{\delta^{\sup}}
+\newcommand{\supk}{\sup_{k\in\{1,\ldots,m\}}}
+\newcommand{\supj}{\sup_{j\in\{1,\ldots,m\}}}
+\newcommand{\PP}{\mathbb{P}}
+\newcommand{\EE}{\mathbb{E}}
+\newcommand{\calV}{\mathcal{V}}
+%\newcommand{\calO}{\mathcal{O}}
+%\newcommand{\calD}{\mathcal{D}}
+%\newcommand{\calS}{\mathcal{S}}
+\newcommand{\calF}{\mathcal{F}}
+\newcommand{\overbar}[2]{\mkern 1.5mu\overline{\mkern-1.5mu#1\mkern-1.5mu}\mkern 1.5mu}
+\newcommand{\1}{\mathbf{1}}
+%\newcommand{\ratio}{0.31}%0.32
+%\newcommand{\ratiob}{0.70}%0.81
+%\newcommand{\ratiorwexp}{0.33}%0.32
+\newcommand{\ratiorwexp}{0.49}%0.32
+
+
+% Paragraph formatting removed for AAAI compliance
+% \setlength{\parindent}{0pt}
+% \setlength{\parskip}{0.5em}
+\newcommand{\textquote}[2] {\medskip
+\hfill\begin{minipage}{0.95\textwidth}{``\textit{#1}''}\end{minipage}}
+
+
+% Title must be in mixed case, not sentence case.
+% That means all verbs (including short verbs like be, is, using, and go),
+% nouns, adverbs, adjectives should be capitalized, including both words in hyphenated terms, while
+% articles, conjunctions, and prepositions are lower case unless they
+% directly follow a colon or long dash
+\title{Bridging Constraints and Stochasticity: A Fully First-Order Method for Stochastic Bilevel Optimization with Linear Constraints}
+
+% For anonymous submission, author information is automatically handled by the AAAI style
+\author{Anonymous Submission}
+\date{}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This work provides the first finite-time convergence guarantees for linearly constrained stochastic bilevel optimization using only first-order methods—requiring solely gradient information without any Hessian computations or second-order derivatives. We address the unprecedented challenge of simultaneously handling linear constraints, stochastic noise, and finite-time analysis in bilevel optimization, a combination that has remained theoretically intractable until now. While existing approaches either require second-order information, handle only unconstrained stochastic problems, or provide merely asymptotic convergence results, our method achieves finite-time guarantees using gradient-based techniques alone. We develop a novel penalty-based framework that constructs hypergradient approximations via smoothed penalty functions, using approximate primal and dual solutions to overcome the fundamental challenges posed by the interaction between linear constraints and stochastic noise. Our theoretical analysis provides explicit finite-time bounds on the bias and variance of the hypergradient estimator, demonstrating how approximation errors interact with stochastic perturbations. We prove that our first-order algorithm converges to $(\delta, \epsilon)$-Goldstein stationary points using $\Theta(\delta^{-1}\epsilon^{-5})$ stochastic gradient evaluations, establishing the first finite-time complexity result for this challenging problem class and representing a significant theoretical breakthrough in constrained stochastic bilevel optimization.
+\end{abstract}
+
+\section{Introduction}
+Bilevel optimization is a powerful paradigm for hierarchical decision-making in machine learning, including hyperparameter tuning~\cite{franceschi2018}, meta-learning~\cite{finn2017model}, and reinforcement learning~\cite{konda1999actor}. The standard formulation can be written in the following optimization:
+\begin{equation} \label{eq:intro_bilevel_general}
+\min_{x \in X} f(x, y^*(x)) \quad \text{s.t.} ~ y^*(x) \in \operatorname*{arg\,min}_{y \in S(x)} g(x, y),
+\end{equation}
+where we define $F(x) \coloneqq f(x, y^*(x))$ to be the overall bilevel objective as a function of $x$.
+Traditional methods of solving bilevel optimization often face scalability challenges~\cite{pedregosa2016hyperparameter, franceschi2017forward}, including implicit differentiation with its requisite Hessian computations~\cite{amos2017optnet,winqvist2020neural,khanduri2025doubly,hu2023contextual,ghadimi2018approximation}, and iterative differentiation characterized by high memory and computational demands.~\cite{shen2024memory,brauer2024learning}
+
+A recent breakthrough in bilevel optimization by~\cite{kwon2023,liu2022bome} proposes using reformulation and penalty-based approaches to design a fully first-order gradient proxy.
+Several follow-up work based on this breakthrough have emerged, including improving finite time convergence of unconstrained bilevel optimization~\cite{chen2024finding,yang2023achieving,chen2024optimal,kwon2024complexity}, constrained bilevel optimization~\cite{khanduri2023linearly,kornowski2024,yao2024constrained,lu2024first}, and applications of bilevel algorithms to machine learning~\cite{pan2024scalebio,zhang2024introduction,petrulionyte2024functional}.
+% In constrained bilevel optimization, Kornowski et al.~\cite{kornowski2024} additionally proposed a new penalty function to handle \textit{deterministic} bilevel problems with linear lower level (LL) constraints.
+
+However, many real-world scenarios involve \textit{stochastic} objectives and \textit{constraints} together, where gradients are noisy estimates from samples. While methods for unconstrained stochastic bilevel optimization have advanced (e.g., \cite{ghadimi2018approximation, kwon2023,liu2022bome}), the confluence of stochasticity and explicit LL linear constraints poses significant unresolved challenges. % The lower-level constraints cna induce nonsmoothness of the hyperobjectiveThe interaction of LL constraints with the upper-level (UL) objective can induce nonsmoothness, necessitating robust stationarity concepts like the Goldstein subdifferential~\cite{goldstein1977}. 
+A critical gap persists: no existing methods offer finite-time convergence guarantees for bilevel problems that are simultaneously \textit{stochastic} and \textit{linearly constrained} in the lower-level problem.
+
+This paper bridges this gap by introducing the Fully First-order Constrained Stochastic Approximation (F2CSA) algorithm. We build upon the deterministic penalty framework of~\cite{kornowski2024}, developing a novel smoothed, stochastic hypergradient oracle tailored for bilevel problems with linearly constrained LL subproblems and stochastic objectives. The key to our approach is a smoothed penalty reformulation that handles inexact dual variables, enabling robust hypergradient estimation from noisy first-order information and inexact LL solves. Our theoretical analysis, based on Lipschitz continuity and careful variance-bias tradeoffs, yields the first finite-time complexity guarantees for reaching $(\delta,\epsilon)$-Goldstein stationary points in this setting.
+
+Our contributions include:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Stochastic Inexact Hypergradient Oracle:} We develop the stochastic inexact hypergradient oracle based on a smoothed Lagrangian penalty method with penalty weighted by $\alpha_1 = \alpha^{-2}$ and $\alpha_2 = \alpha^{-4}$ with $\alpha > 0$.
+    This stochastic inexact gradient oracle can approximate hypergradients with bias bounded by $O(\alpha)$ and variance bounded by $O(1/N_g)$ with $N_g$ access to first-order gradients. The new \textit{smoothed} Lagrangian penalty method also generalizes the proof from \cite{kornowski2024} to allow the use of approximate primal dual lower-level solutions to construct inexact hypergradient oracles.
+
+    % \item \textbf{Bias-Variance Analysis and Control:} We provide a detailed analysis of the oracle's error components. Effective control of these errors is demonstrated through judicious selection of penalty parameters, inner-loop LL accuracy $\delta$, and stochastic batch size $N_g$.
+
+    \item \textbf{Convergence Guarantees:} We apply the 
+    stochastic inexact hypergradient oracle with parameter $\alpha = \epsilon$ and $N_g = O(\epsilon^{-2})$ to design a doulbe-loop algorithm for stochastic bilevel optimization problems with linear constraints. This algorithm attains a $(\delta, \epsilon)$-Goldstein stationary point of $F(x)$ with a total first-order oracle complexity of $\tilde{O}(\delta^{-1}\epsilon^{-5})$. This result generalizes the convergence result of deterministic bilevel optimization with linear constraints with rate $\tilde{O}(\delta^{-1} \epsilon^{-4})$ to the stochastic setting.  % under the assumption of gradient estimators being (mean-squared) Lipschitz. % Our convergence rate for \textit{constrained} stochastic bilevel optimization matches the best-known rate for \textit{unconstrained} stochastic bilevel  $O(\epsilon^{-5})$ in terms of $\epsilon$ under the same assumptions.
+
+    % \item \textbf{Stochastic Extension of Deterministic Approaches:} We extend the fully first-order deterministic constrained bilevel algorithm of~\cite{kornowski2024} to the stochastic domain, maintaining low oracle complexity while ensuring robustness to noisy gradient information.
+
+    % \item \textbf{Smoothed Penalty for Inexact Duals:} The proposed smoothed penalty reformulation is pivotal for robust hypergradient estimation when faced with inexact dual solutions, a common outcome of stochastic LL problem solves.
+
+\end{itemize}
+
+Our work provides the first finite-time convergence guarantees for linearly constrained stochastic bilevel optimization under standard stochastic assumptions, providing a theoretically sound yet practical alternative to traditional bilevel optimization approaches.
+
+\section{Related Work}
+
+\textbf{Penalty Methods and First-Order Reformulations.} To reduce the computational cost of second-order derivatives in bilevel optimization, recent works have proposed scalable, first-order algorithms based on penalty formulations~\cite{kwon2023,liu2022bome}. These techniques transform constrained bilevel problems into single-level surrogates that can be solved efficiently with convergence guarantees, where deterministic, partially stochastic, and fully stochastic bilevel optimization can achieve $\epsilon$-stationary point in $O(\epsilon^{-2})$, $O(\epsilon^{-4})$, $O(\epsilon^{-6})$ gradient calls, respectively~\cite{chen2024optimal}. The convergence rate of the deteministic case can be further improved to $O(\epsilon^{-1.5})$ by momentum-based method~\cite{yang2023achieving}.
+
+\paragraph{Bilevel Optimization with Linear Constraints.}
+Due to the nonsmoothness of constrained bilevel optimizaiton problems, ~\cite{kornowski2024} focuses on Goldstein stationary~\cite{goldstein1977} and designs a new penalty method to achieve a zero-th order algorithm with $O(\delta^{-1} \epsilon^{-3})$ convergence and a first-order algorithm with $O(\delta^{-1} \epsilon^{-4})$ convergence to a ($\epsilon,\delta$)-Goldstein stationary point.
+On the other hand, \cite{yao2024constrained,lu2024first} consider a different stationarity using $\epsilon$-KKT stationary, where \cite{lu2024first} achieves a $O(\epsilon^{-7})$ convergence rate, and \cite{yao2024constrained} achieves a $O(\epsilon^{-2})$ rate under a stronger assumption of access to projection operators.
+
+% The use of quadratic penalties for handling linear constraints has been particularly effective in deterministic settings, where dimension-free rates can be established. Complementary developments in generalized Nash equilibrium and constraint handling further illustrate the power of smooth penalty functions~\cite{gebken2024analyzing}.
+
+% \textbf{Stochastic Bilevel Optimization.} Extending bilevel optimization to the stochastic setting introduces additional challenges due to gradient noise from simulation or sampling. Recent methods address these challenges in the unconstrained setting~\cite{ghadimi2018approximation,kwon2023}, where differentiability and smoothness assumptions are often preserved. However, when the lower-level problem includes constraints, new difficulties arise due to active-set changes and resulting nonsmoothness.
+
+\textbf{Nonsmooth and nonconvex optimization} 
+The nonsmooth and nonconvex structure of bilevel optimization with constraints makes its analysis closely related to the analysis of nonsmooth nonconvex optimization.
+The best-known convergence result of nonsmooth nonconvex optimization is given by ~\cite{zhang2020complexity}, where it concludes the best (lower and upper bound) convergence rate $O(\delta^{-1} \epsilon^{-3})$ for the deterministic case and $O(\delta^{-1} \epsilon^{-4})$ for the stochastic case.
+Our result is $\epsilon$ away from the best rate for the stochastic case, indicating potential room for improvement.
+
+
+% Nonsmooth bilevel optimization presents structural instability due to discontinuous changes in the active constraint set. Analytical tools such as calmness and exact penalization~\cite{burke1991} have been proposed to ensure solution regularity under weaker assumptions than full differentiability. In stochastic environments, recent work has developed model-based minimization techniques for weakly convex objectives~\cite{davis2019stochastic}, and advanced variance-reduction tools such as SPIDER~\cite{fang2018spider} and momentum-based estimators~\cite{cutkosky2019momentum} improve the stability of gradient approximations.
+
+\section{Problem Formulation and Penalty-Based Approximation}
+
+We consider the following linearly constrained bilevel optimization problem:
+
+\begin{equation}
+\min_{x \in X} F(x) := \mathbb{E}_{\xi}\left[ f(x, y^*(x); \xi) \right] \quad \text{s.t.} \quad y^*(x) \in \argmin_{y \in \mathbb{R}^m : h(x, y) \leq \mathbf{0}} \mathbb{E}_{\zeta}\left[ g(x, y; \zeta) \right]
+\end{equation}
+
+Here, $x \in \mathbb{R}^n$ denotes the upper-level (UL) decision variable constrained to a closed convex set $X \subseteq \mathbb{R}^n$, and $y \in \mathbb{R}^m$ is the lower-level (LL) variable. The UL and LL objective functions $f(x, y; \xi)$ and $g(x, y; \zeta)$ are stochastic, depending on random variables $\xi$ and $\zeta$, respectively, which model data or simulation noise. Expectations are taken with respect to the underlying distributions of these random variables.
+
+The LL feasible region is defined by a set of $p$ linear inequality constraints:
+\begin{equation}
+h(x, y) := \mathbf{A} x - \mathbf{B} y - \mathbf{b} \leq \mathbf{0},
+\end{equation}
+where $\mathbf{A} \in \mathbb{R}^{p \times n}$, $\mathbf{B} \in \mathbb{R}^{p \times m}$, and $\mathbf{b} \in \mathbb{R}^p$ are known matrices and vector. We assume the norm of the matrices are bounded by a given constant: $\| A \| \leq M_{\nabla h}$ and $\| B \| \leq M_{\nabla h}$, which also ensures that the Jacobian of the constraint function $h(x,y)$ is bounded. % We assume the LL problem inputs a unique solution $y^*(x)$ for each $x \in X$.
+
+Directly solving the stochastic bilevel problem is challenging due to the implicit dependence of $F(x)$ on $y^*(x)$ and the presence of noise in gradient and function evaluations.
+
+\subsection{Assumptions}
+
+We apply the following standard assumptions to our problem.
+
+\begin{assumption}[Smoothness and Strong Convexity]\label{assumption:smoothness}
+We make the following assumptions on the objectives $f, g$, constraints $h$, and associated matrices:
+\begin{itemize}
+    \item[(i)] \textbf{Upper-Level Objective $f$:}
+    The function $f(x,y)$ is $C_f$-smooth in $(x,y)$ (i.e., its gradient $\nabla f$ is $C_f$-Lipschitz continuous).
+    The function $f(x,y)$ is also $L_f$-Lipschitz continuous in $(x,y)$.
+    \textit{(Note: $L_f$-Lipschitz continuity of $f$ implies that its gradient norm is bounded, i.e., $\|\nabla f(x,y)\| \le L_f$.)}
+
+    \item[(ii)] \textbf{Lower-Level Objective $g$:}
+    The function $g(x,y)$ is $C_g$-smooth in $(x,y)$ (i.e., its gradient $\nabla g$ is $C_g$-Lipschitz continuous).
+    For each fixed $x \in X$, the function $g(x,\cdot)$ is $\mu_g$-strongly convex in $y$, with $\mu_g > 0$.
+    The gradient norm is bounded: $\|\nabla g(x,y)\| \le L_g$. \textit{(Here, $L_g$ is a positive constant bounding the norm of $\nabla g$.)}
+
+    % \item[(iii)] \textbf{Constraints $h(x,y)$:}
+    % The Jacobian of the constraint function $h(x,y)$ is bounded: $\|\nabla h(x,y)\| \le M_{\nabla h}$.
+    % \textit{(Note: The bound $M_{\nabla h}$ is determined by the bounds on $A$, $B$.)}
+
+    \item[(iii)] \textbf{Constraint Qualification (LICQ):}
+    The Linear Independence Constraint Qualification holds for the lower-level constraints at the optimal solution $y^*(x)$ for all $x \in X$. (Specifically, the Jacobian of the active constraints with respect to $y$, given by $-\mathbf{B}$ restricted to its active rows, has full row rank.)
+\end{itemize}
+% where $C_f, L_f, C_g, L_g, \mu_g, M_{\nabla h}$ are positive.
+\end{assumption}
+Under Assumption \ref{assumption:smoothness}, the uniqueness of the LL solution $y^*(x)$ and the corresponding multipliers $\lambda^*(x)$ is guaranteed.
+
+\begin{assumption}[Global Lipschitz continuity of LL solution]\label{assumption:lipschitzness}
+The optimal lower-level solution map $y^*(x)$ is globally $L_y$-Lipschitz continuous in $x$ on $X$. That is, there exists $L_y \geq 0$ such that $\|y^*(x) - y^*(x')\| \leq L_y \|x - x'\|$ for all $x, x' \in X$.
+\end{assumption}
+
+This Lipschitz assumption is a standard assumption in bilevel optimization analysis to ensure convergence analysis \citep{facchinei2007finite}. Given the global Lipschitzness, the resulting UL objective $F(x) = f(x, y^*(x))$ is then $L_F$-Lipschitz continuous with $L_F \leq L_{f,x} + L_{f,y} L_y$.
+
+We assume access only to noisy first-order information via stochastic oracles.
+
+\begin{assumption}[Stochastic Oracles]\label{assumption:stochastic_oracle}
+Stochastic first-order oracles (SFOs) $\nabla \tilde{f}(x, y, \xi)$, $\nabla \tilde{g}(x, y; \zeta)$ are available, satisfying:
+\begin{itemize}
+    \item[(i)] \textbf{Unbiasedness:} $\mathbb{E}[\nabla \tilde{f}(x, y; \xi)] = \nabla f(x, y)$, $\mathbb{E}[\nabla \tilde{g}(x, y; \zeta)] = \nabla g(x, y)$.
+    \item[(ii)] \textbf{Bounded Variance:} $\mathbb{E}[\|\nabla \tilde{f} - \nabla f\|^2] \leq \sigma^2$, $\mathbb{E}[\|\nabla \tilde{g} - \nabla g\|^2] \leq \sigma^2$.
+    % \item[(iii)] \textbf{Mean square Lipschitzness:} $\mathbb{E}[\|\nabla \tilde{g}(x,y,\zeta) - \nabla \tilde{g}(x,y',\zeta) \|] \leq l_{g} \| y - y' \|$
+    % \item[(iii)] \textbf{Sub-Gaussian Noise:} (For high-probability results) Noise vectors are conditionally $\sigma$-sub-Gaussian.
+\end{itemize}
+\end{assumption}
+
+\subsection{Goldstein Stationarity}
+
+Due to the potential nonsmoothness of $F(x)$, we target Goldstein stationarity, a robust concept for nonsmooth optimization.
+
+\begin{definition}[Goldstein Subdifferential \citep{goldstein1977}]\label{def:goldstein}
+For an $L_F$-Lipschitz function $F: \mathbb{R}^n \to \mathbb{R}$, $x \in \mathbb{R}^n$, $\delta > 0$:
+$$
+\partial_\delta F(x) := \conv\left(\bigcup_{z \in B_\delta(x)} \partial F(z)\right)
+$$
+where $\partial F(z)$ is the Clarke subdifferential, and $B_\delta(x)$ is the $\delta$-ball around $x$.
+\end{definition}
+
+\begin{definition}[$(\delta,\epsilon)$-Goldstein Stationarity]\label{def:goldstein_stationarity}
+A point $x \in X$ is $(\delta,\epsilon)$-Goldstein stationary if
+$$
+dist(\mathbf{0}, \partial_\delta F(x) + \mathcal{N}_X(x)) \leq \epsilon,
+$$
+where $\mathcal{N}_X(x)$ is the normal cone to $X$ at $x$.
+\end{definition}
+
+
+\section{Error Analysis for Stochastic Hypergradient}
+\label{sec:error_analysis}
+To ensure our stochastic hypergradient oracle produces an $\alpha$-accurate approximation of $\nabla F(x)$ (with controlled bias and variance) for achieving $(\delta, \epsilon)$-Goldstein stationarity, our analysis proceeds as follows. Lemma~\ref{lemma:dual_extraction} first bounds the penalty Lagrangian's gradient perturbation due to inexact dual variables ($\tilde{\lambda}$ vs. $\lambda^*$). Lemma~\ref{lemma:solution_approx} then leverages this to quantify the resulting shift in the solution of the penalized lower-level problem. These error propagation bounds, along with effects of inexact penalty subproblem minimization, inform Lemma~\ref{lemma:bias_bound}, which establishes the overall $O(\alpha)$ deterministic bias of our hypergradient estimator. Concurrently, Lemma~\ref{lemma:variance-bound} provides the $O(1/N_g)$ bound for stochastic variance. Theorem~\ref{thm:hypergradient-accuracy} combines these bias and variance results to certify the oracle's total mean squared error. Finally, Lemma~\ref{lem:inner-cost} confirms the $\tilde{O}(\alpha^{-2})$ SFO tractability for achieving the required inner-loop accuracies, thereby validating our oracle as an efficient and provably reliable tool.
+
+
+\subsection{Stochastic Implementation}
+We now present our algorithm for computing a stochastic hypergradient estimate using the penalty function with smooth activation.
+
+\begin{algorithm}[h!]
+\caption{Stochastic Penalty-Based Hypergradient Oracle}
+\label{alg:hypergradient_oracle}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} Point $x \in \mathbb{R}^n$, accuracy parameter $\alpha > 0$, stochastic variance $\sigma^2$, batch size $N_g$
+\STATE \textbf{Set:} $\alpha_1 = \alpha^{-2}$, $\alpha_2 = \alpha^{-4}$, $\delta = \alpha^3$
+\STATE Compute $\tilde{y}^*(x)$ and $\tilde{\lambda}(x)$ by SGD s.t. $\|\tilde{y}^*(x) - y^*(x)\| \leq O(\delta)$ and $\|\tilde{\lambda}(x) - \lambda^*(x)\| \leq O(\delta)$
+\STATE Define the smooth Lagrangian $L_{\tilde{\lambda},\alpha}(x, y) $ using Equation~\ref{eq:penalty_hg} and smooth activation function $\rho(x)$ % \COMMENT{\text{Definition }\ref{eq:penalty_hg}}
+\STATE Compute $\tilde{y}(x) = \argmin_y L_{\tilde{\lambda},\alpha}(x, y)\| \leq \delta$ by SGD
+% \STATE Collect $N_g$ i.i.d. samples $\{\xi_j\}_{j=1}^{N_g}$
+\STATE Compute $\nabla\tilde{F}(x) = \frac{1}{N_g}\sum_{j=1}^{N_g} \nabla_x \tilde{L}_{\tilde{\lambda},\alpha}(x, \tilde{y}(x); \xi_j)$ by $N_g$ independent samples
+\STATE \textbf{Output:} $\nabla\tilde{F}(x)$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{remark}[Inner Loop Complexity]
+ Leveraging $g(x,\cdot)$ strong convexity and smoothness, we can achieve $O(\delta)$ accuracy in $O(\kappa_g\log(1/\delta))$ iterations; with $\delta=\Theta(\alpha^3)$ and $\alpha=\Theta(\epsilon)$, this translates to $O(\kappa_g\log(1/\epsilon))$ iterations. The number of inner iterations grows only logarithmically with the inverse target accuracy $\epsilon$, making the nested optimization structure computationally tractable despite the high precision requirements for $\delta$.
+\end{remark}
+
+\textbf{Smooth Activation Function:}
+For constraint values and multipliers, we define the smooth activation function $\rho_i(x)$ as:
+$$\rho_i(x) = \sigma_h(h_i(x, \tilde{y}^*(x))) \cdot \sigma_\lambda(\tilde{\lambda}^*_i(x))$$
+where:
+\begin{align}
+    & \sigma_h(z) = \begin{cases}
+0 & \text{if } z < -\tau \delta \\
+\frac{\tau \delta + z}{\tau \delta} & \text{if } -\tau \delta \leq z < 0 \\
+1 & \text{if } z \geq 0
+\end{cases}
+& \sigma_\lambda(z) = \begin{cases}
+0 & \text{if } z \leq 0 \\
+\frac{z}{\epsilon_\lambda} & \text{if } 0 < \lambda < \epsilon_\lambda \\
+1 & \text{if } z \geq \epsilon_\lambda
+\end{cases}
+\end{align}
+
+with $\tau = \Theta(\delta)$ and $\epsilon_\lambda > 0$ being small positive parameters.
+
+Our smooth activation differentiability enables the gradient bound of Lemma~\ref{lemma:dual_extraction}, its continuity under $\tilde{y}^*(x),\tilde{\lambda}(x)$ yields the stability in Lemma~\ref{lemma:variance-bound}, and its gradual on/off switch removes the set‑difference term in the error bound driving Theorem~\ref{thm:convergence-stochastic-grad}.
+
+The penalty function used for hypergradient estimation is constructed as:
+\begin{align}
+L_{\tilde{\lambda},\alpha}(x,y) = f(x, y) &+ \alpha_1 \left( g(x, y) + (\tilde{\lambda}(x))^T h(x, y) - g(x, \tilde{y}^*(x)) \right) \nonumber + \frac{\alpha_2}{2} \sum_{i=1}^{p} \rho_i(x) \cdot h_i(x, y)^2 \label{eq:penalty_hg}
+\end{align}
+where $\alpha_1 = \alpha^{-2}$ and $\alpha_2 = \alpha^{-4}$ for $\alpha > 0$. This function incorporates the UL objective $f$ along with $\tilde{\lambda}(x)$ and an initial lower-level solution ($\tilde{y}^*(x)$) to promote adherence to the lower-level problem's KKT conditions and enforce its constraints via an adaptively smoothed quadratic penalty.
+
+The expected output of the oracle is the gradient of L: $\mathbb{E}[\nabla\tilde{F}(x)] = \nabla_x L_{\tilde{\lambda}^*,\alpha}(x, \tilde{y}(x))$.
+
+
+For the error introduced by our stochastic hypergradient oracle (Algorithm \ref{alg:hypergradient_oracle}), the total error can be decomposed into its bias and variance components relative to the true hypergradient $\nabla F(x)$:
+\begin{align}
+\mathbb{E}[\|\nabla\tilde{F}(x) - \nabla F(x)\|^2] = \underbrace{\mathbb{E}[\|\nabla\tilde{F}(x) - \mathbb{E}[\nabla\tilde{F}(x)]\|^2]}_{\text{Variance}} + \underbrace{\|\mathbb{E}[\nabla\tilde{F}(x)] - \nabla F(x)\|^2}_{\text{Bias}^2}
+\end{align}
+
+Our analysis starts by quantifying a key source of deterministic error: the impact of using approximate dual variables $\tilde{\lambda}(x)$ instead of the true $\lambda^*(x)$ on the gradient of the penalty Lagrangian.
+\begin{restatable}[Lagrangian Gradient Approximation]{lemma}{dualextraction}
+\label{lemma:dual_extraction}
+Assume $\|\tilde{\lambda}(x) - \lambda^*(x)\| \leq C_{\lambda}\delta$ and under Assumption \ref{assumption:smoothness} (iii), let $\alpha_1 = \alpha^{-2}$, $\alpha_2 = \alpha^{-4}$, and $\tau = \Theta(\delta)$. Then for fixed $(x,y)$:
+$$ \|\nabla L_{\lambda^*, \alpha}(x, y) - \nabla L_{\tilde{\lambda},\alpha}(x,y)\| \leq O(\alpha_1 \delta + \alpha_2 \delta). $$
+\end{restatable}
+
+The lemma provides a bound on the gradient difference introduced by inexact dual variables. The proof technique decomposes this error into linear and quadratic penalty terms, leveraging Lipschitz continuity and controlled approximation errors to establish a proportional relationship with the accuracy parameter $\delta$.
+
+
+
+Building on this result, we next bound the difference between exact solutions for true and approximate dual variables:
+\begin{restatable}[Solution–Approximation Error]{lemma}{solutionapprox}
+\label{lemma:solution_approx}
+Let $y^*_{\lambda,\alpha}(x) := \operatorname*{arg\,min}_{y} L_{\lambda,\alpha}(x,y)$ with $\alpha_1=\alpha^{-2}$ and $\alpha_2=\alpha^{-4}$. Assume the target accuracy parameter $\alpha$ satisfies $\alpha \geq \frac{2 C_f}{\mu_g}$ (where $C_f$ is the smoothness constant of $f$ and $\mu_g$ is the strong convexity constant of $g(x,\cdot)$ as per Assumption~\ref{assumption:smoothness}), so that $L_{\lambda,\alpha}(x,y)$ is $\mu = \Omega(\alpha\mu_g)$-strongly convex in $y$. If the dual approximation satisfies Assumption~\ref{assumption:stochastic_oracle} $\|\tilde{\lambda}(x)-\lambda^*(x)\|\le C_\lambda\delta$ and the gradient bound from Lemma~\ref{lemma:dual_extraction} holds, then:
+\[
+\|y^*_{\lambda^*,\alpha}(x) - y^*_{\tilde{\lambda},\alpha}(x)\| \leq \frac{C_{\text{sol}}}{\mu}(\alpha_1 + \alpha_2)\delta,
+\]
+where the constant $C_{\text{sol}}$ depends on $C_\lambda$ and $M_{\nabla h}$ (the bound on $\|\nabla h\|$ from Assumption~\ref{assumption:smoothness}(iii)).
+\end{restatable}
+
+We establish a bound on the difference between exact and approximate solutions of the penalty-regularized problem, utilizing strong convexity and previous gradient approximation results.
+
+With controlled approximation errors, we now derive a systematic bias bound.
+\subsection{Bias Analysis (Deterministic Error)}
+
+The bias, $\|\mathbb{E}[\nabla\tilde{F}(x)] - \nabla F(x)\|$, represents the systematic error incurred even with infinite samples in the final averaging step ($N_g \to \infty$). It arises purely from the penalty approximation itself and the fact that we use inexact solutions $\tilde{\lambda}, \tilde{y}$ obtained from inner loops instead of the true $y^*, \lambda^*, y^*_{\lambda^*,\alpha}$.
+
+\begin{restatable}[Hypergradient–Bias Bound]{lemma}{hypergradapprox}
+\label{lemma:bias_bound}
+Let $\nabla_x L_{\lambda,\alpha}(x,y)$ denote the partial gradient of the penalty Lagrangian with respect to $x$. Assume it is $L_{H,y}$–Lipschitz in $y$ and $L_{H,\lambda}$–Lipschitz in $\lambda$.
+With $\alpha_1=\alpha^{-2}$, $\alpha_2=\alpha^{-4}$, choose
+$\delta=\Theta(\alpha^{3})$ and suppose
+$\|\tilde{y}(x)-y^*_{\tilde{\lambda},\alpha}(x)\|\le\delta$ and
+$\|\tilde{\lambda}(x)-\lambda^*(x)\|\le C_\lambda\delta$.
+If $L_{\lambda^*,\alpha}(x,\cdot)$ is $\mu$–strongly convex with
+$\mu\ge c_\mu\alpha^{-2}$, then
+\[
+\| \mathbb{E}[\nabla\tilde{F}(x)] - \nabla F(x) \| \le C_{\text{bias}}\alpha,
+\]
+where $C_{\text{bias}}$ depends only on $L_{H,y}$, $L_{H,\lambda}$, $C_g$, $C_\lambda$, $c_\mu$, and the penalty constant $C_{\text{pen}}$.
+\end{restatable}
+
+\begin{proof}[Proof Sketch]
+The systematic error (bias) of our oracle where $\mathbb{E}[\nabla\tilde{F}(x)] = \nabla_x L_{\tilde{\lambda},\alpha}(x, \tilde{y}(x))$, is bounded by decomposing it into three main parts using the triangle inequality:
+
+\begin{enumerate}
+    \item $\|\nabla_x L_{\tilde{\lambda},\alpha}(x, \tilde{y}(x)) - \nabla_x L_{\tilde{\lambda},\alpha}(x, y^*_{\tilde{\lambda},\alpha}(x))\|$: With $\nabla_x L_{\tilde{\lambda},\alpha}$ is $L_{H,y}$-Lipschitz in $y$ and $\tilde{y}(x)$ is $\delta$-close to $y^*_{\tilde{\lambda},\alpha}(x)$, this error is bounded by $L_{H,y}\delta$. Given $\delta=\Theta(\alpha^3)$, $T_1$ is $O(\alpha^3)$.
+
+    \item $\|\nabla_x L_{\tilde{\lambda},\alpha}(x, y^*_{\tilde{\lambda},\alpha}(x)) - \nabla_x L_{\lambda^*,\alpha}(x, y^*_{\lambda^*,\alpha}(x))\|$: Control by the $L_{H,\lambda}$-Lipschitzness of $\nabla_x L$ with respect to $\lambda$ (using the $C_\lambda\delta$ bound for $\|\tilde{\lambda}-\lambda^*\|$) and by how much the minimizer shifts (using Lemma~\ref{lemma:solution_approx}, we see a shift proportional to $O(\alpha_2\delta)/\mu$). With our parameter choices ($\delta=\Theta(\alpha^3)$, $\mu=\Theta(\alpha^{-2})$, $\alpha_2=\alpha^{-4}$), $T_2$ simplifies to $O(\alpha)$.
+
+    \item $\|\nabla_x L_{\lambda^*,\alpha}(x, y^*_{\lambda^*,\alpha}(x)) - \nabla F(x)\|$: This approximation error of the penalty method is assumed to be $O(C_{\text{pen}}\alpha)$.
+\end{enumerate}
+Combining these error sources ($O(\alpha^3) + O(\alpha) + O(\alpha)$), the total bias is dominated by the $O(\alpha)$ terms.
+\end{proof}
+
+
+
+This lemma confirms that the systematic error introduced by the penalty method and inexact solves can be made proportional to the target accuracy $\alpha$ by ensuring sufficiently high precision ($\delta=O(\alpha^3)$) in the intermediate steps.
+
+\subsection{Variance Analysis (Stochastic Error)}
+
+The variance, $\text{Var}(\nabla\tilde{F}(x)\mid x, \tilde{\lambda}, \tilde{y}) = \mathbb{E}[\|\nabla\tilde{F}(x) - \mathbb{E}[\nabla\tilde{F}(x)]\|^2\mid x, \tilde{\lambda}, \tilde{y}]$, measures the error introduced by using a finite batch size $N_g$ in the final step of the oracle to estimate the expected gradient $\mathbb{E}[\nabla\tilde{F}(x)]$.
+
+\begin{restatable}[Variance Bound]{lemma}{variancebound}
+\label{lemma:variance-bound}
+Under Assumption~\ref{assumption:stochastic_oracle}\,(i)--(ii),
+let $\sigma^2$ be a uniform bound on 
+\(
+\operatorname{Var}\!\bigl(\nabla_x \tilde L_{\tilde\lambda,\alpha}(x,\tilde y;\xi)\,\big|\,x,\tilde\lambda,\tilde y\bigr).
+\)
+With a mini‑batch of $N_g$ i.i.d.\ samples in Algorithm~\ref{alg:hypergradient_oracle}, the conditional variance of the hypergradient estimate satisfies
+\[
+\operatorname{Var}\!\bigl(\nabla\tilde F(x)\,\big|\,x,\tilde\lambda,\tilde y\bigr)
+\;\le\;
+\frac{\sigma^{2}}{N_g}.
+\]
+\end{restatable}
+\begin{proof}[Proof Sketch]
+The hypergradient estimate $\nabla\tilde{F}(x)$ is the average of $N_g$ i.i.d. random vectors $G_j = \nabla_x \tilde L_{\tilde\lambda,\alpha}(x, \tilde y;\xi_j)$. By our Assumption \ref{assumption:stochastic_oracle}(ii), each term $G_j$ has its conditional variance bounded by $\sigma^2$, i.e., $\operatorname{Var}(G_j \mid x, \tilde{\lambda}, \tilde{y}) \leq \sigma^2$. Given that the samples $\xi_j$ are i.i.d., the terms $G_j$ are conditionally independent. The conditional variance of their average is bounded as a result. This is standard for the variance of a mini-batch average.
+\end{proof}
+
+\subsection{Combined Error Bounds}
+
+We combine the bias and variance bounds to characterize the overall accuracy of the hypergradient oracle.
+\begin{restatable}[Accuracy of Stochastic Hypergradient]{theorem}{hypergradaccuracy}
+\label{thm:hypergradient-accuracy}
+Let $\nabla\tilde{F}(x)$ be the output of Algorithm \ref{alg:hypergradient_oracle} with penalty parameters $\alpha_1 = \alpha^{-2}, \alpha_2 = \alpha^{-4}$, and inner accuracy $\delta = O(\alpha^3)$. There exists a constant $C_{\text{bias}}$ such that:
+\[
+\mathbb{E}[\|\nabla\tilde{F}(x) - \nabla F(x)\|^2] \leq 2 C_{\text{bias}}^2 \alpha^2 + \frac{2 \sigma^2}{N_g}.\]
+\end{restatable}
+\begin{proof}[Proof Sketch]
+We apply the standard bias–variance decomposition. The bias term is bounded using Lemma~\ref{lemma:bias_bound}, which shows that the expected output of the oracle approximates the true gradient up to an $O(\alpha)$ error.
+- The variance term is controlled using Lemma~\ref{lemma:variance-bound}, which shows that averaging $N_g$ noisy gradients leads to variance bounded by $\sigma^2 / N_g$.
+
+Adding these two contributions and applying Jensen’s inequality yields the desired total error bound.
+\end{proof}
+
+
+\begin{restatable}[Inner–loop oracle complexity]{lemma}{innercost}
+\label{lem:inner-cost}
+Fix $\alpha>0$ and set
+$\alpha_1=\alpha^{-2}$, $\alpha_2=\alpha^{-4}$, $\delta=\Theta(\alpha^{3})$.
+Let $g(x,\cdot)$ be $\mu_g$–strongly convex and $C_g$–smooth, and
+the stochastic oracles of Assumption~\ref{assumption:stochastic_oracle} have variance $\sigma^{2}$.
+Choose the mini-batch size $N_g=\sigma^{2}/\alpha^{2}$.
+Running Algorithm~\ref{alg:hypergradient_oracle} with 
+\[
+\tilde O\!\bigl(\alpha^{-2}\bigr)
+\quad\text{stochastic first-order oracle (SFO) calls in its inner loops,} 
+\]
+yields a stochastic inexact gradient $\nabla\tilde{F}(x)$ characterized by bias of \(O(\alpha)\) and variance of \(O(\alpha^2)\).
+\end{restatable}
+
+\section{Stochastic Bilevel Algorithm and Convergence Analysis}
+
+\label{sec:algorithm_convergence}
+We now introduce the principal algorithm, F2CSA (Algorithm \ref{alg:convergence-inexact-grad}), which leverages the previously analyzed stochastic hypergradient oracle within the context of a non-smooth, non-convex optimization framework. Subsequently, we present detailed convergence proofs that provide rigorous guarantees for the identification of $(\delta, \epsilon)$-Goldstein stationary points.
+
+\begin{algorithm}[h!]
+\caption{Nonsmooth Nonconvex Algorithm with Inexact Stochastic Hypergradient Oracle}
+\label{alg:convergence-inexact-grad}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} Initialization $x_0 \in \mathbb{R}^n$, clipping parameter $D > 0$, step size $\eta > 0$, Goldstein accuracy $\delta > 0$, iteration budget $T \in \mathbb{N}$, inexact stochastic gradient oracle $\nabla\tilde{F}: \mathbb{R}^n \to \mathbb{R}^n$
+\STATE \textbf{Initialize:} $\Delta_1 = 0$
+\FOR{$t = 1, \ldots, T$}
+\STATE Sample $s_t \sim \text{Unif}[0, 1]$
+\STATE $x_t = x_{t-1} + \Delta_t$, $z_t = x_{t-1} + s_t\Delta_t$
+\STATE Compute $g_t = \nabla\tilde{F}(z_t)$ by running Algorithm~\ref{alg:hypergradient_oracle} using $N_g = O(\alpha^{-2})$ samples. This ensures the inexact gradient has bias $O(\alpha)$ and variance $O(\alpha^2)$. % \COMMENT{Call Algorithm \ref{alg:hypergradient_oracle} to get a stochastic inexact gradient estimate}
+\STATE $\Delta_{t+1} = \text{clip}_D(\Delta_t - \eta g_t)$ \COMMENT{$\text{clip}_D(v) := \min\{1, \frac{D}{\|v\|}\} \cdot v$}
+\ENDFOR
+\STATE $M = \lfloor\frac{\delta}{D}\rfloor$, $K = \lfloor\frac{T}{M}\rfloor$ \COMMENT{Group iterations for Goldstein subdifferential}
+\FOR{$k = 1, \ldots, K$}
+\STATE $x_k = \frac{1}{M}\sum_{m=1}^{M} z_{(k-1)M+m}$
+\ENDFOR
+\STATE \textbf{Output:} $x_{\text{out}} \sim \text{Uniform}\{x_1, \ldots, x_K\}$
+\end{algorithmic}
+\end{algorithm}
+
+Algorithm~\ref{alg:convergence-inexact-grad} provides an iterative framework leveraging our inexact stochastic hypergradient oracle (Algorithm~\ref{alg:hypergradient_oracle}). The method maintains a direction term $\Delta_t$, updated using a momentum-like step involving the oracle's output $g_t = \nabla\tilde{F}(z_t)$ and subsequently clipped to ensure $\|\Delta_t\| \le D$. Crucially, the output iterates $x_k$ are constructed by averaging samples points $z_t$ for evaluation by the oracle, a technique aimed at finding points that satisfy Goldstein subdifferential conditions \cite{goldstein1977, zhang2020complexity, davis2019stochastic}.
+
+\begin{remark}[Integration with Stochastic Hypergradient Oracle]\label{rem:algorithm_relationship_nsn}
+Algorithm~\ref{alg:convergence-inexact-grad} utilizes Algorithm~\ref{alg:hypergradient_oracle} as its gradient estimation subroutine. This integration needs careful parameter adjustments for accurate oracle estimates and manageable computation.
+\end{remark}
+\subsection{Convergence to Goldstein Stationarity}
+
+
+The following theorem establishes that with an inexact gradient oracle having bounded error, Algorithm \ref{alg:convergence-inexact-grad} achieves Goldstein stationarity with a specified number of iterations.
+
+\begin{restatable}[Convergence with Stochastic Hypergradient Oracle]{theorem}{convergence}\label{thm:convergence-stochastic-grad}
+Suppose $F: \mathbb{R}^n \to \mathbb{R}$ is $L_F$-Lipschitz. Let $\nabla\tilde{F}(\cdot)$ be a stochastic hypergradient oracle satisfying:
+\begin{enumerate}
+    \item Bias bound: $\|\mathbb{E}[\nabla\tilde{F}(x)] - \nabla F(x)\| \leq C_{\text{bias}}\alpha$
+    \item Variance bound: $\mathbb{E}[\|\nabla\tilde{F}(x) - \mathbb{E}[\nabla\tilde{F}(x)]\|^2] \leq \frac{\sigma^2}{N_g}$
+\end{enumerate}
+Then running Algorithm \ref{alg:convergence-inexact-grad} with $D = \Theta(\frac{\delta\epsilon^2}{L_F^2})$, $\eta = \Theta(\frac{\delta\epsilon^3}{L_F^4})$, $N_g = \Theta(\frac{\sigma^2}{\alpha^2})$, outputs a point $x_{\text{out}}$ such that $\mathbb{E}[\text{dist}(\mathbf{0}, \partial_\delta F(x_{\text{out}}))] \leq \epsilon + O(\alpha)$, with $T = O(\frac{(F(x_0)-\inf F)L_F^2}{\delta\epsilon^3})$ calls to $\nabla\tilde{F}(\cdot)$.
+\end{restatable}
+
+\begin{proof}[Proof Sketch]
+We analyze the clipped update scheme using regret decomposition. Each step error is split into a variance term (controlled via $N_g = \Theta(\sigma^2/\epsilon^2)$) and a bias term (from Lemma~\ref{lemma:bias_bound}, $\alpha = \Theta(\epsilon)$).
+
+Averaging over $M = \Theta(1/\epsilon^2)$ iterations ensures inclusion in $\partial_\delta F(x_k)$ due to proximity of $z_t$ to $x_k$. Choosing $D = \Theta(\delta\epsilon^2)$ and $\eta = \Theta(\delta\epsilon^3)$ balances all error terms.
+
+Summing the regret and enforcing Goldstein conditions yields the stated stationarity bound.
+\end{proof}
+% \begin{restatable}[Iteration Complexity]{theorem}{complexity}
+% \label{thm:complexity}
+% {\color{red}The total number of gradient evaluations (calls to $\nabla\tilde{F}(\cdot)$), using $C_0 = F(x_0) - \inf F$, is:
+% \begin{align}
+% T = MK = \Theta\left(\frac{C_0}{\delta\epsilon^3}\right) = \Theta\left(\frac{F(x_0) - \inf F}{\delta\epsilon^3}\right) \label{eq:T_iter_A_thm_adjusted}
+% \end{align}
+% Each gradient evaluation requires $N_g = \Theta\left(\frac{\sigma^2}{\alpha^2}\right)$ stochastic oracle calls. Setting $\alpha = \Theta(\epsilon)$ to ensure the $O(\alpha)$ term in the stationarity bound is commensurate with the target $\epsilon$, we have $N_g = \Theta\left(\frac{\sigma^2}{\epsilon^2}\right)$. }
+% \end{restatable}
+
+
+
+Using Theorem~\ref{thm:convergence-stochastic-grad}, we can finally show the overall complexity of stochastic constrained bilevel optimization.
+\begin{theorem}[Complexity of solving stochastic constrained bilevel optimization]
+The total stochastic first-order oracle (SFO) complexity is 
+\begin{align}
+T \cdot N_g = \Theta\left(\frac{F(x_0) - \inf F}{\delta\epsilon^3}\right) \cdot \Theta\left(\frac{\sigma^2}{\epsilon^2}\right) = \Theta\left(\frac{(F(x_0) - \inf F) \sigma^2}{\delta\epsilon^5}\right) \label{eq:SFO_A_thm}
+\end{align}
+Including logarithmic factors from the inner loops, this becomes:
+\begin{align}
+\text{SFO complexity} = \tilde{O}\left(\frac{(F(x_0) - \inf F) \sigma^2}{\delta\epsilon^5}\right)= \tilde{O}(\delta^{-1}\epsilon^{-5})\label{eq:SFO_A_tilde_thm}
+\end{align}
+\end{theorem}
+
+\section{Experiments}
+To validate our theoretical analysis and assess the practical performance of the proposed Penalty-FFO algorithm, we conduct experiments on synthetic bilevel optimization problems with varying dimensionality. We compare our method against SSIGD, a Hessian-based stochastic bilevel optimization approach, evaluating both computational efficiency and convergence properties.
+
+\subsection{Experimental Setup}
+\paragraph{Bilevel problem.}
+For all experiments, we consider a bilevel problem with the following structure:
+\begin{equation}
+\boxed{
+\begin{aligned}
+\min_{x \in \mathbb{R}^{d_x}} \quad & f(x, y^*(x)) = c^\top y^*(x) + 0.01 \|x\|^2 + 0.01 \|y^*(x)\|^2 \\
+\text{where} \quad y^*(x) &= \arg\min_{y \in \mathbb{R}^{d_y}} \;
+\tfrac{1}{2} y^\top Q y + (P^\top x)^\top y \\
+&\quad \text{s.t.} \quad A x + B y \leq b \\
+&\quad \text{with } Q = Q_0 + Z,\; \|Z\|_F \approx \texttt{q\_noise}.
+\end{aligned}
+}
+\end{equation}
+
+Here, $Q_0 \in \mathbb{S}_{++}^{d_y}$ is a positive definite matrix, $P \in \mathbb{R}^{d_x \times d_y}$ connects the upper and lower level variables, $A \in \mathbb{R}^{m \times d_x}$ and $B \in \mathbb{R}^{m \times d_y}$ define linear inequality constraints, and $c \in \mathbb{R}^{d_y}$ with $\|c\|_2 = 1$ appears in the upper-level objective. The matrix $Q$ is perturbed by random noise $Z$ to simulate stochasticity in the optimization process.
+
+We examine problem configurations with increasing dimensionality, ranging from small-scale ($d_y = 10$) to large-scale ($d_y = 500$) instances. For our main convergence analysis, we use configurations with:
+
+For computational scaling analysis, we extend testing to include problems with $d_y = 500$ to evaluate performance on high-dimensional tasks.
+
+\paragraph{Algorithms.} Our proposed Penalty-FFO algorithm uses a penalty formulation to avoid costly Hessian calculations, while SSIGD (Stochastic Subsampled Inexact Gradient Descent) serves as our baseline, representing traditional second-order methods for bilevel optimization that incorporate Hessian information but require costly matrix operations.
+
+\subsection{Results and Analysis}
+\subsubsection{Convergence and Solution}
+The comparative convergence trajectories are depicted in Figure~\ref{fig:lossconvergence} (loss) and Figure~\ref{fig:gradconvergence} (gradient norm). F2CSA demonstrates markedly superior initial performance, with its loss (blue curve, Figure~\ref{fig:lossconvergence}) rapidly descending to values below -5.0 well before 10,000 iterations. SSIGD (red curve) exhibits a more measured initial descent, requiring 15,000-20,000 iterations to reach comparable loss levels. While both algorithms ultimately converge to similar final loss values (around -5.7), F2CSA's rapid approach to this vicinity underscores its efficiency in scenarios prioritizing quick attainment of high-quality solutions.
+
+% Figure temporarily commented out - image files need to be provided
+% \begin{figure}[htbp]
+%     \centering
+%     \begin{minipage}{0.33\textwidth}
+%         \centering
+%         \includegraphics[width=\linewidth]{lossconvergence.png}
+%         \caption{Loss Trajectories}
+%         \label{fig:lossconvergence}
+%     \end{minipage}%
+%     \hfill
+%     \begin{minipage}{0.33\textwidth}
+%         \centering
+%         \includegraphics[width=\linewidth]{gradconvergence.png}
+%         \caption{Gradient Norm Trajectories}
+%         \label{fig:gradconvergence}
+%     \end{minipage}%
+%     \hfill
+%     \begin{minipage}{0.33\textwidth}
+%         \centering
+%         \includegraphics[width=\linewidth]{iter_cost.pdf}
+%         \caption{ Computational Cost vs. Dimension}
+%         \label{fig:computational_efficiency}
+%     \end{minipage}
+%     % \caption{Comparative performance analysis: (a) Loss convergence trajectories for F2CSA and SSIGD on $d_y=20$. (b) Gradient norm convergence for the same runs. (c) Average per-iteration computational cost scaling with problem dimension $y_{dim}$.}
+%     \label{fig:combined_experimental_results}
+% \end{figure}
+
+Examining the gradient norm dynamics Figure~\ref{fig:gradconvergence}), initially plummets, reaching $O(10^{-1})$ significantly faster than SSIGD (red SMA). However, in the later stages (beyond ~40,000 iterations), SSIGD's gradient norm continues a steady decline to values below $3 \times 10^{-2}$, whereas F2CSA's gradient norm SMA plateaus around $2-3 \times 10^{-1}$ and exhibits more pronounced oscillations in its raw values. This behavior in F2CSA is characteristic of penalty methods operating on a surrogate objective; the optimization landscape, shaped by penalty parameters $\alpha_1, \alpha_2$, facilitates rapid progress but may lead to a neighborhood of solutions where achieving extremely small gradients for the original problem is challenging, particularly with stochasticity and the two-stage solution process within F2CSA potentially introducing variance \cite{ghadimi2018approximation}. SSIGD's use of lower-level Hessian information appears to aid in achieving a finer asymptotic reduction in gradient norm, albeit at the cost of slower initial progress.
+
+\subsubsection{Computational Scalability with Problem Dimension}
+\label{sec:exp_scalability}
+Computational cost is critical for scalability. Figure~\ref{fig:computational_efficiency} compares F2CSA and SSIGD as $y_{dim}$ scales from 200 to 2500. While comparable at lower dimensions, F2CSA's scalability is markedly superior for larger problems. At $y_{dim}=2500$, F2CSA is over three times faster per iteration. This advantage stems from F2CSA's first-order nature, avoiding SSIGD's Hessian-related matrix operations whose $O(y_{dim}^3)$ complexity becomes prohibitive. F2CSA's reliance on efficient conic solvers for its two subproblems results in more favorable empirical scaling, underscoring its suitability for large-scale constrained bilevel optimization.
+
+\subsubsection{Effect of Penalty Parameter on Convergence}
+% Figure temporarily commented out - image file needs to be provided
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=0.7\textwidth]{convergence.png}
+%     \caption{Comparison of convergence behavior with different $\alpha$ values}
+%     \label{fig:convergence_behavior}
+% \end{figure}
+The penalty parameter $\alpha$ is pivotal for F2CSA. Figure~\ref{fig:convergence_behavior} (illustrating converged runs for $\alpha \in [0.15, 0.30]$ with their best LRs over 50,000 iterations) and broader tuning insights reveal key dependencies:
+\begin{itemize}[leftmargin=*,nosep]
+    \item \textbf{Small $\alpha$ values} (e.g., $\alpha \leq 0.10$): Tend to cause divergence. The large penalty coefficients ($\alpha^{-2}, \alpha^{-4}$) can lead to ill-conditioned penalized objectives, making optimization difficult for first-order methods amid stochasticity and inexact inner solves.
+    \item \textbf{Large $\alpha$ values} (e.g., hypothetically $\alpha > 0.3-0.5$): May result in weak penalties, leading to poor approximation of the bilevel problem, failure to satisfy lower-level conditions, or degraded hypergradient quality due to an overly loose inner-loop accuracy $\delta = \Theta(\alpha^3)$.
+    \item \textbf{Effective Range:} Successful convergence for $\alpha \in [0.15, 0.30]$ (Figure~\ref{fig:convergence_behavior}; Stage 2 run with $\alpha=0.30$) indicates an effective operational range. Within this range, $\alpha$ balances robust guidance towards bilevel solutions with numerical stability, contingent on co-tuning with the learning rate.
+\end{itemize}
+\section{Conclusion and Future Work}
+
+There are several promising directions for further research. First, specialized analysis of different stochasticity patterns in bilevel optimization remains an open area. While our work addresses the fully stochastic case with noise in both levels, scenarios with isolated upper-level or lower-level stochasticity deserve dedicated treatment. Recent work by Salehi et al.~\cite{salehi2025} has demonstrated that upper-level-only stochasticity, commonly arising from data sampling in validation sets, can benefit from specialized algorithms with improved convergence guarantees for imaging applications.
+
+Problems with lower-level-only stochasticity, prevalent in large-scale empirical risk minimization and actor-critic methods as studied by Hong et al.~\cite{hong2023}, present distinct challenges in hypergradient estimation that could benefit from tailored approaches. The analysis in~\cite{PMLR-BatchTradeoff2020} suggests that optimal mini-batch sizing strategies may differ substantially between these cases, potentially leading to improved complexity results.
+
+Another promising direction involves integrating constraint qualifications developed for mathematical programs with equilibrium constraints~\cite{ye1995,ye2010} into the stochastic bilevel setting. The constraint qualifications studied by Ke et al.~\cite{ke2022} could potentially lead to tighter convergence guarantees under additional structural assumptions on the constraint set.
+
+Finally, extending our penalty-based approach to handle more general nonlinear constraints represents a significant challenge. The work by Burke~\cite{burke1991} on exact penalization provides theoretical foundations, but practical algorithms that maintain computational efficiency while handling nonlinear constraints in the stochastic setting remain underdeveloped. Combining our stochastic hypergradient oracle with the linearized quadratic penalty approach of Kong et al.~\cite{OptOnlineAffine2022} may offer a promising path forward.
+
+A comprehensive analysis examining these different scenarios would address important gaps in the literature and provide valuable guidance for practitioners working with specific application domains, particularly in reinforcement learning, meta-learning, and hyperparameter optimization where bilevel structures naturally arise.
+% References
+\bibliographystyle{aaai2026}
+\bibliography{references}
+
+% Reproducibility Checklist
+% \def\isChecklistMainFile{}
+% \input{ReproducibilityChecklist}
+
+
+% Appendix
+\newpage
+\appendix
+\onecolumn
+\section{Appendix}
+
+\dualextraction*
+\begin{proof}
+Define penalty Lagrangian:
+\begin{align}
+L_{\lambda,\alpha}(x,y) = f(x, y) + \alpha_1(g(x, y) + \lambda^T h(x, y) - g(x, \tilde{y}^*(x))) + \frac{\alpha_2}{2} \sum_{i=1}^{p} \rho_i(x) h_i(x, y)^2 \label{eq:lag_def}
+\end{align}
+
+with activation $\rho_i(x) = \sigma_h(h_i(x, \tilde{y}^*(x))) \cdot \sigma_\lambda(\lambda_i(x))$ and dual error $\Delta \lambda = \lambda^*(x) - \tilde{\lambda}(x)$.
+
+The gradient difference decomposes as:
+\begin{align}
+\nabla L_{\lambda^*, \alpha} - \nabla L_{\tilde{\lambda}} = \underbrace{\alpha_1 (\nabla h)^T \Delta \lambda}_{\text{Linear Term}} + \underbrace{\nabla \Delta_Q}_{\text{Quadratic Term}} \label{eq:grad_decomp}
+\end{align}
+
+where $\Delta_Q = \frac{\alpha_2}{2}\sum_{i=1}^{p}\Delta\rho_i(x) h_i(x,y)^2$ with $\Delta\rho_i(x) = \rho_i^*(x) - \tilde{\rho}_i(x)$.
+
+Linear Term in \eqref{eq:grad_decomp}:
+
+From $h(x,y) = \mathbf{A}x - \mathbf{B}y - \mathbf{b}$, we have:
+\begin{align}
+\|\nabla h\| \leq \|\mathbf{A}\| + \|\mathbf{B}\| \leq 2M_{AB} \label{eq:grad_h_bound}
+\end{align}
+
+Using \eqref{eq:grad_h_bound} and $\|\Delta \lambda\| \leq C_\lambda \delta$:
+\begin{align}
+\|\alpha_1 (\nabla h)^T \Delta \lambda\| \leq \alpha_1 \cdot 2M_{AB} \cdot C_\lambda \delta = O(\alpha_1 \delta) \label{eq:linear_bound}
+\end{align}
+
+Quadratic Term in \eqref{eq:grad_decomp}:
+
+The quadratic gradient expands to:
+\begin{align}
+\nabla\Delta_Q = \underbrace{\alpha_2\sum_{i=1}^{p}\Delta\rho_i h_i \nabla h_i}_{\text{$(T_1)$}} + \underbrace{\frac{\alpha_2}{2}\sum_{i=1}^{p}h_i^2 \nabla\Delta\rho_i}_{\text{T2}} \label{eq:quad_decomp}
+\end{align}
+
+(T1): $\Delta\rho_i \neq 0$ only for near-active constraints where $|h_i(x,\tilde{y}^*(x))| \leq \tau\delta = O(\delta)$.
+
+For constraint values:
+\begin{align}
+h_i(x,y) - h_i(x,\tilde{y}^*(x)) = \mathbf{B}_i(\tilde{y}^*(x) - y) \implies |h_i(x,y) - h_i(x,\tilde{y}^*(x))| \leq M_{AB} \delta \label{eq:h_diff}
+\end{align}
+
+Using \eqref{eq:h_diff}: $|h_i(x,y)| \leq O(\delta) + M_{AB}\delta = O(\delta)$ for near-active constraints.
+
+With $|\Delta\rho_i| \leq 1$ and $\|\nabla h_i\| \leq 2M_{AB}$:
+\begin{align}
+\|\Delta\rho_i h_i \nabla h_i\| \leq O(\delta) \implies \|\text{T1}\| \leq \alpha_2 p \cdot O(\delta) = O(\alpha_2 \delta) \label{eq:term1_bound}
+\end{align}
+
+$(T_2)$: $\|\nabla\Delta\rho_i\| = O(1/\delta)$ only when $|h_i(x,\tilde{y}^*(x))| = O(\delta)$.
+
+In these regions: $|h_i(x,y)| = O(\delta)$ so:
+\begin{align}
+h_i^2 \cdot \|\nabla\Delta\rho_i\| = O(\delta)^2 \cdot O(1/\delta) = O(\delta) \label{eq:h_squared_grad}
+\end{align}
+
+Using \eqref{eq:h_squared_grad}:
+\begin{align}
+\|\text{T2}\| \leq \frac{\alpha_2}{2} p \cdot O(\delta) = O(\alpha_2 \delta) \label{eq:term2_bound}
+\end{align}
+
+From \eqref{eq:linear_bound}, \eqref{eq:term1_bound}, and \eqref{eq:term2_bound}:
+\begin{align}
+\|\nabla L_{\lambda^*, \alpha} - \nabla L_{\tilde{\lambda}}\| \leq O(\alpha_1 \delta) + O(\alpha_2 \delta) + O(\alpha_2 \delta) = O(\alpha_1 \delta + \alpha_2 \delta)
+\end{align}
+\end{proof}
+
+\solutionapprox*
+\begin{proof}
+Let $y^{*}_{\lambda^*,\alpha}(x)$ be denoted by $y^{*}_{\lambda^*}$ and $y^{*}_{\tilde{\lambda},\alpha}(x)$ be denoted by $y^{*}_{\tilde{\lambda}}$ for brevity in this proof.
+From the definition of these minimizers, we have the first-order optimality conditions:
+\begin{align}
+\nabla_y L_{\lambda^*,\alpha}(x, y^{*}_{\lambda^*}) &= 0 \label{eq:opt_cond1} \\
+\nabla_y L_{\tilde{\lambda},\alpha}(x, y^{*}_{\tilde{\lambda}}) &= 0 \label{eq:opt_cond2}
+\end{align}
+The lemma assumes that $L_{\lambda,\alpha}(x,y)$ is $\mu$-strongly convex in $y$ (for relevant $\lambda$, including $\lambda^*$). Thus, $L_{\lambda^*,\alpha}(x, \cdot)$ is $\mu$-strongly convex.
+A standard property of a $\mu$-strongly convex function $\phi(y)$ with minimizer $y_1^*$ is that for any $y_2$:
+$$ \mu \|y_1^* - y_2\|^2 \leq \langle \nabla_y \phi(y_1^*) - \nabla_y \phi(y_2), y_1^* - y_2 \rangle $$
+Applying this with $\phi(y) = L_{\lambda^*,\alpha}(x,y)$, $y_1^* = y^{*}_{\lambda^*}$, and $y_2 = y^{*}_{\tilde{\lambda}}$:
+$$ \mu \|y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}}\|^2 \leq \langle \nabla_y L_{\lambda^*,\alpha}(x, y^{*}_{\lambda^*}) - \nabla_y L_{\lambda^*,\alpha}(x, y^{*}_{\tilde{\lambda}}), y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}} \rangle $$
+Using the optimality condition from Eq.~(\ref{eq:opt_cond1}), $\nabla_y L_{\lambda^*,\alpha}(x, y^{*}_{\lambda^*}) = 0$, this simplifies to:
+$$ \mu \|y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}}\|^2 \leq \langle - \nabla_y L_{\lambda^*,\alpha}(x, y^{*}_{\tilde{\lambda}}), y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}} \rangle $$
+Now, we add and subtract $\nabla_y L_{\tilde{\lambda},\alpha}(x, y^{*}_{\tilde{\lambda}})$ inside the inner product (and use $\nabla_y L_{\tilde{\lambda},\alpha}(x, y^{*}_{\tilde{\lambda}}) = 0$ from Eq.~(\ref{eq:opt_cond2})):
+\begin{align*}
+\mu \|y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}}\|^2 &\leq \langle \nabla_y L_{\tilde{\lambda},\alpha}(x, y^{*}_{\tilde{\lambda}}) - \nabla_y L_{\lambda^*,\alpha}(x, y^{*}_{\tilde{\lambda}}), y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}} \rangle \\
+&\quad \textit{(since } \nabla_y L_{\tilde{\lambda},\alpha}(x, y^{*}_{\tilde{\lambda}}) = 0 \textit{)}
+\end{align*}
+Applying the Cauchy-Schwarz inequality:
+$$ \mu \|y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}}\|^2 \leq \|\nabla_y L_{\tilde{\lambda},\alpha}(x, y^{*}_{\tilde{\lambda}}) - \nabla_y L_{\lambda^*,\alpha}(x, y^{*}_{\tilde{\lambda}})\| \cdot \|y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}}\| $$
+If $y^{*}_{\lambda^*} \neq y^{*}_{\tilde{\lambda}}$, we can divide by $\|y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}}\|$:
+$$ \mu \|y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}}\| \leq \|\nabla_y L_{\lambda^*,\alpha}(x, y^{*}_{\tilde{\lambda}}) - \nabla_y L_{\tilde{\lambda},\alpha}(x, y^{*}_{\tilde{\lambda}})\| $$
+
+
+Lemma~\ref{lemma:dual_extraction} states that for any fixed $(x,y)$, $\|\nabla L_{\lambda^*, \alpha}(x, y) - \nabla L_{\tilde{\lambda},\alpha}(x,y)\| \leq O(\alpha_1 \delta + \alpha_2 \delta)$. This implies there exists a constant, which we identify with $C_{\text{sol}}$ from the lemma statement (where $C_{\text{sol}}$ depends on $C_\lambda$ and $M_{\nabla h}$), such that:
+$$ \|\nabla L_{\lambda^*, \alpha}(x, y^{*}_{\tilde{\lambda}}) - \nabla L_{\tilde{\lambda},\alpha}(x, y^{*}_{\tilde{\lambda}})\| \leq C_{\text{sol}}(\alpha_1 + \alpha_2)\delta $$
+Substituting this into the inequality above:
+$$ \mu \|y^{*}_{\lambda^*} - y^{*}_{\tilde{\lambda}}\| \leq C_{\text{sol}}(\alpha_1 + \alpha_2)\delta $$
+Dividing by $\mu$ (which is positive as $\mu = \Omega(\alpha\mu_g)$ and $\mu_g > 0, \alpha >0$) yields the result:
+$$ \|y^{*}_{\lambda^*,\alpha}(x) - y^{*}_{\tilde{\lambda},\alpha}(x)\| \leq \frac{C_{\text{sol}}}{\mu}(\alpha_1 + \alpha_2)\delta $$
+If $y^{*}_{\lambda^*} = y^{*}_{\tilde{\lambda}}$, the inequality holds trivially. This completes the proof.
+\end{proof}
+
+\hypergradapprox*
+\begin{proof}
+The quantity to bound is the bias $\| \mathbb{E}[\nabla\tilde{F}(x)] - \nabla F(x) \| = \| \nabla_x L_{\tilde{\lambda},\alpha}(x, \tilde{y}(x)) - \nabla F(x) \|$. We decompose this error into three parts using the triangle inequality:
+\begin{align}
+\| \nabla_x L_{\tilde{\lambda},\alpha}(x, \tilde{y}(x)) - \nabla F(x) \| 
+&\leq \underbrace{\|\nabla_x L_{\tilde{\lambda},\alpha}(x, \tilde{y}(x)) - \nabla_x L_{\tilde{\lambda},\alpha}(x, y^*_{\tilde{\lambda},\alpha}(x))\|}_{T_1} \\
+&\quad + \underbrace{\|\nabla_x L_{\tilde{\lambda},\alpha}(x, y^*_{\tilde{\lambda},\alpha}(x)) - \nabla_x L_{\lambda^*,\alpha}(x, y^*_{\lambda^*,\alpha}(x))\|}_{T_2} \\
+&\quad + \underbrace{\|\nabla_x L_{\lambda^*,\alpha}(x, y^*_{\lambda^*,\alpha}(x)) - \nabla F(x)\|}_{T_3}
+\end{align}
+
+$(T_1)$: This term bounds the error from the inexact minimization of $L_{\tilde{\lambda},\alpha}(x,\cdot)$. Using the $L_{H,y}$-Lipschitz continuity of $\nabla_x L_{\tilde{\lambda},\alpha}(x,y)$ with respect to $y$ (as assumed in the lemma statement) and the condition $\|\tilde{y}(x) - y^*_{\tilde{\lambda},\alpha}(x)\| \leq \delta$ (from the lemma statement, where $\delta = \Theta(\alpha^3)$):
+\begin{align}
+T_1 \leq L_{H,y} \|\tilde{y}(x) - y^*_{\tilde{\lambda},\alpha}(x)\| \leq L_{H,y} \delta = O(\delta).
+\end{align}
+
+$(T_2)$: This term bounds the error from using the approximate dual $\tilde{\lambda}(x)$ instead of the true dual $\lambda^*(x)$ in defining the penalty Lagrangian and its minimizer. Using the triangle inequality:
+\begin{align}
+T_2 &\leq \|\nabla_x L_{\tilde{\lambda},\alpha}(x, y^*_{\tilde{\lambda},\alpha}(x)) - \nabla_x L_{\tilde{\lambda},\alpha}(x, y^*_{\lambda^*,\alpha}(x))\| \nonumber \\
+&\quad + \|\nabla_x L_{\tilde{\lambda},\alpha}(x, y^*_{\lambda^*,\alpha}(x)) - \nabla_x L_{\lambda^*,\alpha}(x, y^*_{\lambda^*,\alpha}(x))\|.
+\end{align}
+The first part of the sum is bounded by $L_{H,y} \|y^*_{\tilde{\lambda},\alpha}(x) - y^*_{\lambda^*,\alpha}(x)\|$ (using the assumed $L_{H,y}$-Lipschitz continuity of $\nabla_x L_{\tilde{\lambda},\alpha}(x,y)$ w.r.t $y$). The second part is bounded by $L_{H,\lambda} \|\tilde{\lambda}(x) - \lambda^*(x)\|$ (using the assumed $L_{H,\lambda}$-Lipschitz continuity of $\nabla_x L_{\cdot,\alpha}(x,y^*_{\lambda^*,\alpha}(x))$ w.r.t the dual variable).
+Invoking Lemma~\ref{lemma:solution_approx} for $\|y^*_{\tilde{\lambda},\alpha}(x) - y^*_{\lambda^*,\alpha}(x)\| \leq \frac{C_{\text{sol}}}{\mu}(\alpha_1 + \alpha_2)\delta$, and using the condition $\|\tilde{\lambda}(x)-\lambda^*(x)\|\le C_\lambda\delta$ (from Assumption~\ref{assumption:stochastic_oracle}, with $\delta = \Theta(\alpha^3)$ as per this lemma's setup):
+\begin{align}
+T_2 &\leq L_{H,y} \cdot \frac{C_{\text{sol}}}{\mu}(\alpha_1 + \alpha_2)\delta + L_{H,\lambda} \cdot C_\lambda \delta \\
+&= O\left(\frac{(\alpha_1 + \alpha_2)\delta}{\mu}\right) + O(\delta). \label{eq:T2_bound_detail}
+\end{align}
+Given $\alpha_1 = \alpha^{-2}$, $\alpha_2 = \alpha^{-4}$, so $(\alpha_1+\alpha_2) = O(\alpha^{-4})$. With $\delta = \Theta(\alpha^3)$ and $\mu = \Theta(\alpha^{-2})$ (from the lemma condition $\mu \ge c_\mu \alpha^{-2}$), the first term is $O\left(\frac{\alpha^{-4}\alpha^3}{\alpha^{-2}}\right) = O(\alpha)$. The second term $O(\delta)$ is $O(\alpha^3)$. Thus, $T_2 = O(\alpha)$.
+
+$(T_3)$: This term measures the inherent approximation error of the idealized penalty method (using true $\lambda^*$ and exact minimization $y^*_{\lambda^*,\alpha}(x)$) with respect to the true hypergradient $\nabla F(x)$. As per the lemma's setup, this is bounded by:
+\begin{align}
+T_3 = \|\nabla_x L_{\lambda^*,\alpha}(x, y^*_{\lambda^*,\alpha}(x)) - \nabla F(x)\| \leq C_{\text{pen}} \alpha,
+\end{align}
+for some problem-dependent constant $C_{\text{pen}}$.
+
+Combining Terms: Summing the bounds for $T_1, T_2,$ and $T_3$, with $\delta = \Theta(\alpha^3)$:
+\begin{align}
+\|\nabla_x L_{\tilde{\lambda},\alpha}(x, \tilde{y}(x)) - \nabla F(x)\| &\leq O(\delta) + O(\alpha) + O(C_{\text{pen}}\alpha) \\
+&= O(\alpha^3) + O(\alpha) + O(\alpha) = O(\alpha).
+\end{align}
+Since $\mathbb{E}[\nabla\tilde{F}(x)] = \nabla_x L_{\tilde{\lambda},\alpha}(x, \tilde{y}(x))$, we conclude that $\|\mathbb{E}[\nabla\tilde{F}(x)] - \nabla F(x)\| \leq C_{\text{bias}}\alpha$. The conditions $\delta = \Theta(\alpha^3)$ and $\mu= \Theta(\alpha^{-2})$ ensure that all error components are either $O(\alpha)$ or of a smaller order.
+\end{proof}
+
+\variancebound*
+\begin{proof}
+Let $G_j = \nabla_x \tilde{L}_{\tilde{\lambda}, \alpha}(x, \tilde{y};\xi_j)$ for $j=1,\dots,N_g$. Conditional on $x, \tilde{\lambda},\tilde{y}$, these $G_j$ are i.i.d. random vectors with mean $\mathbb{E}[G_j \mid x, \tilde{\lambda},\tilde{y}] = \nabla_x L_{\tilde{\lambda}, \alpha}(x, \tilde{y}(x)) = \mathbb{E}[\nabla\tilde{F}(x) \mid x, \tilde{\lambda}, \tilde{y}]$.
+
+The conditional variance of the averaged estimator is:
+\begin{align}
+\text{Var}(\nabla\tilde{F}(x) \mid x, \tilde{\lambda}, \tilde{y}) &= \text{Var}\left(\frac{1}{N_g} \sum_{j=1}^{N_g} G_j \; \Bigg| \; x, \tilde{\lambda}, \tilde{y} \right) 
+= \frac{1}{N_g^2} \text{Var}\left(\sum_{j=1}^{N_g} G_j \; \Bigg| \; x, \tilde{\lambda}, \tilde{y} \right)
+\end{align}
+
+Since the $G_j$ are independent conditional on $x, \tilde{\lambda}, \tilde{y}$, we have:
+\begin{align}
+\text{Var}\left(\sum_{j=1}^{N_g} G_j \; \Bigg| \; x, \tilde{\lambda}, \tilde{y} \right) = \sum_{j=1}^{N_g} \text{Var}(G_j \mid x, \tilde{\lambda}, \tilde{y})
+\end{align}
+
+By our Assumption \ref{assumption:stochastic_oracle}(ii), $\text{Var}(G_j \mid x, \tilde{\lambda}, \tilde{y}) \leq \sigma^2$ for all $j$. Therefore:
+\begin{align}
+\text{Var}(\nabla\tilde{F}(x) \mid x, \tilde{\lambda}, \tilde{y}) &= \frac{1}{N_g^2} \sum_{j=1}^{N_g} \text{Var}(G_j \mid x, \tilde{\lambda}, \tilde{y}) 
+\leq \frac{1}{N_g^2} \sum_{j=1}^{N_g} \sigma^2 
+= \frac{N_g \sigma^2}{N_g^2} 
+= \frac{\sigma^2}{N_g}
+\end{align}
+
+Thus, the variance of the hypergradient estimator is bounded by $\frac{\sigma^2}{N_g}$, which scales inversely with the batch size $N_g$. This shows that the stochastic error can be reduced by increasing the final batch size $N_g$, scaling as $1/N_g$.
+\end{proof}
+
+
+\hypergradaccuracy*
+\begin{proof}
+i) Using the bias-variance decomposition and properties of conditional expectation:
+\begin{align}
+\mathbb{E}[\|\nabla\tilde{F}(x) - \nabla F(x)\|^2] &= \mathbb{E}[\|\nabla\tilde{F}(x) - \mathbb{E}[\nabla\tilde{F}(x)] + \mathbb{E}[\nabla\tilde{F}(x)] - \nabla F(x)\|^2]
+\end{align}
+
+By the inequality $\|a+b\|^2 \leq 2\|a\|^2 + 2\|b\|^2$:
+\begin{align}
+\mathbb{E}[\|\nabla\tilde{F}(x) - \nabla F(x)\|^2] &\leq 2\mathbb{E}[\|\nabla\tilde{F}(x) - \mathbb{E}[\nabla\tilde{F}(x)]\|^2] + 2\|\mathbb{E}[\nabla\tilde{F}(x)] - \nabla F(x)\|^2
+\end{align}
+
+The first term is the expected conditional variance:
+\begin{align}
+\mathbb{E}[\|\nabla\tilde{F}(x) - \mathbb{E}[\nabla\tilde{F}(x)]\|^2] &= \mathbb{E}[\mathbb{E}[\|\nabla\tilde{F}(x) - \mathbb{E}[\nabla\tilde{F}(x)]\|^2 \mid x, \tilde{\lambda}, \tilde{y}]] \\
+&= \mathbb{E}[\text{Var}(\nabla\tilde{F}(x) \mid x, \tilde{\lambda}, \tilde{y})]
+\end{align}
+
+From Lemma \ref{lemma:variance-bound}, we know that $\text{Var}(\nabla\tilde{F}(x) \mid x, \tilde{\lambda}, \tilde{y}) \leq \frac{\sigma^2}{N_g}$. Therefore:
+\begin{align}
+\mathbb{E}[\|\nabla\tilde{F}(x) - \mathbb{E}[\nabla\tilde{F}(x)]\|^2] \leq \frac{\sigma^2}{N_g}
+\end{align}
+
+The second term is the squared bias, which from Lemma \ref{lemma:bias_bound} is bounded by:
+\begin{align}
+\|\mathbb{E}[\nabla\tilde{F}(x)] - \nabla F(x)\|^2 \leq (C_{\text{bias}} \alpha)^2 = C_{\text{bias}}^2 \alpha^2
+\end{align}
+
+Combining these bounds:
+\begin{align}
+\mathbb{E}[\|\nabla\tilde{F}(x) - \nabla F(x)\|^2] &\leq 2 \cdot \frac{\sigma^2}{N_g} + 2 \cdot C_{\text{bias}}^2 \alpha^2 \\
+&= 2 C_{\text{bias}}^2 \alpha^2 + \frac{2 \sigma^2}{N_g}
+\end{align}
+\end{proof}
+
+\innercost*
+\begin{proof}
+We count the stochastic-gradient oracle calls made in one execution of
+Algorithm~\ref{alg:hypergradient_oracle}.  
+The inner tolerance is $\delta=\Theta(\alpha^{3})$.
+
+C1.  Lower-level pair $(\tilde y^{*},\tilde\lambda^{*})$:
+For every outer iterate $x$, the constrained LL objective
+$g(x,\cdot)$ is $\mu_{g}$-strongly convex and $C_{g}$-smooth
+(Assumption~\ref{assumption:smoothness}).  
+A stochastic primal–dual (SPD) algorithm with mini-batches satisfies
+linear convergence  
+\(
+\EE\|y_{t}-y^{*}\|^{2}\le
+\bigl(1-\tfrac1{\kappa_{g}}\bigr)^{t}\!D_{0}^{2},
+\quad
+\kappa_{g}:=C_{g}/\mu_{g}
+\)
+Hence
+\[
+t_{1}=O\!\bigl(\kappa_{g}\log(1/\delta)\bigr)
+=O\!\Bigl(\tfrac{C_{g}}{\mu_{g}}\log\tfrac1\delta\Bigr)
+\]
+oracle calls give
+$\|\,\tilde y^{*}-y^{*}\|,\;
+\|\,\tilde\lambda^{*}-\lambda^{*}\|\le\delta$.
+
+C2. Penalty minimisation $(\tilde y)$: With $\alpha_{1}=\alpha^{-2}$ and $\alpha_{2}=\alpha^{-4}$ we analyze
+$L_{\tilde\lambda^{*},\alpha}(x,\cdot)$:
+
+\begin{itemize}
+\item \textit{Strong convexity.}  
+The term $\alpha_{1}g$ contributes $\alpha_{1}\mu_{g}$;
+the smooth term $f$ can subtract at most $C_{f}$ curvature.
+For sufficiently small $\alpha$,
+$\mu_{\mathrm{pen}}\ge\alpha_{1}\mu_{g}/2$.
+\item \textit{Smoothness.}  
+Because each $h_{i}$ is affine in $y$,
+the quadratic penalty has Hessian bounded by
+$\alpha_{2}\|B\|^{2}$, so
+$L_{\mathrm{pen}}=\Theta(\alpha_{2})$
+\end{itemize}
+
+Therefore the condition number is
+\[
+\kappa_{\mathrm{pen}}
+=\frac{L_{\mathrm{pen}}}{\mu_{\mathrm{pen}}}
+=\Theta\!\bigl(\alpha^{-2}/\mu_{g}\bigr).
+\]
+A linear-rate variance–reduced method (SVRG) requires
+$t_{2}=O\!\bigl(\kappa_{\mathrm{pen}}\log(1/\delta)\bigr)
+=O\!\bigl(\alpha^{-2}\log(1/\delta)/\mu_{g}\bigr)$
+oracle calls to attain
+$\|\tilde y-y^{*}_{\tilde\lambda^{*},\alpha}\|\le\delta$\cite{PMLR-SVRG2013}.                  
+
+C3. Total inner cost: Summing $t_{1}$ and $t_{2}$ and adding the mini-batch evaluations:
+
+\[
+\text{cost}(x)
+=O\!\Bigl(
+\bigl(\tfrac{C_{g}}{\mu_{g}}
++\tfrac{\alpha^{-2}}{\mu_{g}}\bigr)
+\log\tfrac1\delta
+\Bigr)
+\;+\;
+N_{g}.
+\]
+
+Because $\delta=\Theta(\alpha^{3})$,
+$\log(1/\delta)=3\log(1/\alpha)$ (absorbed into  $\tilde O(\cdot)$) and $\alpha^{-2}$ dominates $C_{g}$ for
+small $\alpha$, so
+
+\[
+\text{cost}(x)=\tilde O\!\bigl(\alpha^{-2}/\mu_{g}\bigr)+N_{g}.
+\]
+
+Using Lemma~\ref{lemma:variance-bound},
+$N_{g}$ should satisfy
+$\sigma/\sqrt{N_{g}}\;\asymp\;\alpha$,
+hence
+$N_{g}=\Theta(\sigma^{2}/\alpha^{2})$.                       
+Plugging in,
+\(\text{cost}(x)=\tilde O(\alpha^{-2})\)
+( constants depending on $\mu_{g}$ and $\sigma^{2}$ are absorbed).
+
+With this batch size,
+\(
+\EE\bigl\|\tilde\nabla F(x)-\nabla F(x)\bigr\|
+\le
+O(\alpha)+\sigma/\sqrt{N_{g}}
+=O(\alpha),
+\)
+so the oracle outputs an $\alpha$-accurate hyper-gradient.
+
+Set $\alpha=\Theta(\varepsilon)$ for outer-loop tolerance
+$\varepsilon$; the inner cost becomes
+$\tilde O(\varepsilon^{-2})$
+\end{proof}
+
+\convergence*
+\begin{proof}
+For any $t \in [T]$, since $x_t = x_{t-1} + \Delta_t$, we have by the fundamental theorem of calculus:
+\begin{align}
+F(x_t) - F(x_{t-1}) &= \int_0^1 \langle \nabla F(x_{t-1} + s\Delta_t), \Delta_t \rangle ds \label{eq:fund_thm}\\
+&= \mathbb{E}_{s_t \sim \text{Unif}[0,1]}[\langle \nabla F(x_{t-1} + s_t\Delta_t), \Delta_t \rangle] \label{eq:expectation}\\
+&= \mathbb{E}[\langle \nabla F(z_t), \Delta_t \rangle] \label{eq:expectation_z}
+\end{align}
+where equation \eqref{eq:expectation_z} follows from our algorithm's definition of $z_t = x_{t-1} + s_t\Delta_t$. Summing over $t \in [T] = [K \times M]$:
+\begin{align}
+\inf F \leq F(x_T) & =  F(x_0) + \sum_{t=1}^T \mathbb{E}[\langle \nabla F(z_t), \Delta_t \rangle] \label{eq:sum_ineq}\\
+&= F(x_0) + \underbrace{\sum_{k=1}^K \sum_{m=1}^M \mathbb{E}[\langle \nabla F(z_{(k-1)M+m}), \Delta_{(k-1)M+m} - u_k \rangle]}_{\text{regret of online gradient descent}} \nonumber\\
+&\quad + \underbrace{\sum_{k=1}^K \sum_{m=1}^M \mathbb{E}[\langle \nabla F(z_{(k-1)M+m}), u_k \rangle]}_{\text{Gradient norm}}\label{eq:decomp_sum}
+\end{align}
+where we've added and subtracted $\langle \nabla F(z_t), u_k \rangle$ in \eqref{eq:decomp_sum} for any sequence of reference points $u_1, \ldots, u_K \in \mathbb{R}^d$ satisfying $\| u_i \| \leq D ~\forall i$. 
+
+The first double sum represents the regret of online gradient descent with stochastic gradients. For any $t \in [T]$:
+\begin{align}
+\|\Delta_{t+1} - u_k\|^2 &= \|\text{clip}_D(\Delta_t - \eta\tilde{g}_t) - u_k\|^2 \label{eq:clip_bound_1}\\
+&\leq \|\Delta_t - \eta\tilde{g}_t - u_k\|^2 \label{eq:clip_bound_2}\\
+&= \|\Delta_t - u_k\|^2 + \eta^2\|\tilde{g}_t\|^2 - 2\eta\langle \Delta_t - u_k, \tilde{g}_t \rangle \label{eq:expand_norm}
+\end{align}
+where \eqref{eq:clip_bound_2} follows since projection onto a convex set decreases distance. Rearranging \eqref{eq:expand_norm}:
+\begin{align}
+\langle \tilde{g}_t, \Delta_t - u_k \rangle \leq \frac{\|\Delta_t - u_k\|^2 - \|\Delta_{t+1} - u_k\|^2}{2\eta} + \frac{\eta\|\tilde{g}_t\|^2}{2} \label{eq:rearrange}
+\end{align}
+% Now, let's decompose the key inner product using the bias-variance structure:
+% \begin{align}
+% \mathbb{E}[\langle \nabla F(z_t), \Delta_t - u_k \rangle] &= \mathbb{E}[\langle \tilde{g}_t, \Delta_t - u_k \rangle] + \mathbb{E}[\langle \nabla F(z_t) - \tilde{g}_t, \Delta_t - u_k \rangle]
+% \end{align}
+Now, we decompose the key inner product using the bias-variance structure of our stochastic gradient oracle:
+\begin{align}
+\mathbb{E}[\langle \nabla F(z_t), \Delta_t - u_k \rangle] &= \mathbb{E}[\langle \tilde{g}_t, \Delta_t - u_k \rangle] + \mathbb{E}[\langle \nabla F(z_t) - \tilde{g}_t, \Delta_t - u_k \rangle] \label{eq:decomp_inner}
+\end{align}
+
+\paragraph{First term in \cref{eq:decomp_inner}:} For the first term in \eqref{eq:decomp_inner}, using inequality \eqref{eq:rearrange}:
+\begin{align}
+\mathbb{E}[\langle \tilde{g}_t, \Delta_t - u_k \rangle] &\leq \mathbb{E}\left[\frac{\|\Delta_t - u_k\|^2 - \|\Delta_{t+1} - u_k\|^2}{2\eta} + \frac{\eta\|\tilde{g}_t\|^2}{2}\right] \label{eq:bound_first_term}
+\end{align}
+For the expected squared norm in \eqref{eq:bound_first_term}, using the bias-variance decomposition and the $L$-Lipschitz property of $F$:
+\begin{align}
+\mathbb{E}[\|\tilde{g}_t\|^2] &= \mathbb{E}[\|\mathbb{E}[\tilde{g}_t|z_t] + (\tilde{g}_t - \mathbb{E}[\tilde{g}_t|z_t])\|^2] \label{eq:expand_square}\\
+&\leq \mathbb{E}[\|\mathbb{E}[\tilde{g}_t|z_t]\|^2] + \mathbb{E}[\|\tilde{g}_t - \mathbb{E}[\tilde{g}_t|z_t]\|^2] \label{eq:orthogonality}\\
+&\leq L^2 + \frac{\sigma^2}{N_g} \label{eq:lipschitz_bound}\\
+&= L^2 + O(\alpha^2) = O(1) \quad \quad \quad \text{ (for small } \alpha = o(1) \text{ and $L$ is a given constant)} \label{eq:norm_final}
+\end{align}
+where \eqref{eq:orthogonality} follows from the equality of the bias and variance terms.
+Therefore, we have:
+\begin{align}
+\mathbb{E}[\langle \tilde{g}_t, \Delta_t - u_k \rangle] &\leq \mathbb{E}\left[\frac{\|\Delta_t - u_k\|^2 - \|\Delta_{t+1} - u_k\|^2}{2\eta} \right] + O(\eta) \label{eq:final_first_term}
+\end{align}
+
+
+\paragraph{Second term in \cref{eq:decomp_inner}:} based on Cauchy-Schwarz inequality and noting that both $\|\Delta_t\|\leq D$ and $\|u_k\|\leq D$ by construction, we have:
+\begin{align}
+\mathbb{E}[\langle \nabla F(z_t) - \tilde{g}_t, \Delta_t - u_k \rangle] &\leq \mathbb{E}[\|\nabla F(z_t) - \tilde{g}_t\| \cdot \|\Delta_t - u_k\|] \label{eq:cs_ineq}\\
+&\leq 2D \cdot \mathbb{E}[\|\nabla F(z_t) - \tilde{g}_t\|] \label{eq:bound_second_term}
+\end{align}
+
+By triangle inequality and the properties of our stochastic oracle:
+\begin{align}
+\mathbb{E}[\|\nabla F(z_t) - \tilde{g}_t\|] &\leq \mathbb{E}[\|\nabla F(z_t) - \mathbb{E}[\tilde{g}_t|z_t]\|] + \mathbb{E}[\|\mathbb{E}[\tilde{g}_t|z_t] - \tilde{g}_t\|] \label{eq:triangle}\\
+&\leq C_{\text{bias}}\alpha + \mathbb{E}[\|\mathbb{E}[\tilde{g}_t|z_t] - \tilde{g}_t\|] \label{eq:bias_bound}
+\end{align}
+
+For the variance term in \eqref{eq:bias_bound}, by Jensen's inequality:
+\begin{align}
+\mathbb{E}[\|\mathbb{E}[\tilde{g}_t|z_t] - \tilde{g}_t\|] &\leq \sqrt{\mathbb{E}[\|\mathbb{E}[\tilde{g}_t|z_t] - \tilde{g}_t\|^2]} \label{eq:jensen}\\
+&= \sqrt{\mathbb{E}[\mathbb{E}[\|\mathbb{E}[\tilde{g}_t|z_t] - \tilde{g}_t\|^2|z_t]]} \label{eq:tower}\\
+&= \sqrt{\mathbb{E}[\text{Var}(\tilde{g}_t|z_t)]} \leq \frac{\sigma}{\sqrt{N_g}} \label{eq:var_bound}
+\end{align}
+where \eqref{eq:tower} follows from the tower property of conditional expectation, and \eqref{eq:var_bound} uses our variance bound assumption.
+When $N_g = \Theta(\frac{\sigma^2}{\alpha^2})$ ensures:
+\begin{align}
+\mathbb{E}[\|\nabla F(z_t) - \tilde{g}_t\|] \leq C_{\text{bias}}\alpha + \frac{\sigma}{\sqrt{N_g}} = C_{\text{bias}}\alpha + O(\alpha) = O(\alpha) \label{eq:total_error}
+\end{align}
+
+Therefore, combining \eqref{eq:bound_second_term} and \eqref{eq:total_error}, we can bound the second term in \cref{eq:decomp_inner} by:
+:
+\begin{align}
+\mathbb{E}[\langle \nabla F(z_t) - \tilde{g}_t, \Delta_t - u_k \rangle] \leq 2D \cdot O(\alpha) = O(D\alpha) \label{eq:final_second_term}
+\end{align}
+
+
+\paragraph{Putting together first term and second term}:
+Combining \eqref{eq:final_first_term} and \eqref{eq:final_second_term}:
+\begin{align}
+\mathbb{E}[\langle \nabla F(z_t), \Delta_t - u_k \rangle] &\leq \mathbb{E}\left[\frac{\|\Delta_t - u_k\|^2 - \|\Delta_{t+1} - u_k\|^2}{2\eta}\right] + O(\eta) + O(D\alpha) \label{eq:combined_bound}
+\end{align}
+
+Summing \eqref{eq:combined_bound} over $t = (k-1)M + m$ with $m = 1, \ldots, M$ for a fixed $k$:
+\begin{align}
+& \sum_{m=1}^M \mathbb{E}[\langle \nabla F(z_{(k-1)M+m}), \Delta_{(k-1)M+m} - u_k \rangle] \nonumber\\
+\leq & \sum_{m=1}^M \mathbb{E}\left[\frac{\|\Delta_{(k-1)M+m} - u_k\|^2 - \|\Delta_{(k-1)M+m+1} - u_k\|^2}{2\eta}\right] + \sum_{m=1}^M O(\eta) + \sum_{m=1}^M O(D\alpha) \label{eq:sum_m}\\
+\leq & \frac{\mathbb{E}[\|\Delta_{(k-1)M+1} - u_k\|^2 - \|\Delta_{(k-1)M+M+1} - u_k\|^2]}{2\eta} + O(M \eta) +  O(M D\alpha) \label{eq:telescope}
+\end{align}
+
+Since $\|\Delta_t\| \leq D$ and $\|u_k\| \leq D$, we have $\|\Delta_t - u_k\| \leq 2D ~\forall t$. Therefore, we can further bound \eqref{eq:telescope} by:
+\begin{align}
+& \frac{\mathbb{E}[\|\Delta_{(k-1)M+1} - u_k\|^2 - \|\Delta_{(k-1)M+M+1} - u_k\|^2]}{2\eta} + O(M \eta) +  O(M D\alpha) \\
+\leq & \frac{4D^2}{2\eta} +O(M \eta) + O(M D\alpha) \nonumber\\
+= & O(\frac{D^2}{\eta} + M\eta + MD\alpha)  
+\end{align}
+
+Since this inequality holds for all $\eta \in \mathbb{R}_+$, we can choose $\eta = O(\frac{D}{\sqrt{M}})$ to minimize the upper bound to get the tightest upper bound:
+\begin{align}
+     \sum_{m=1}^M \mathbb{E}[\langle \nabla F(z_{(k-1)M+m}), \Delta_{(k-1)M+m} - u_k \rangle] \leq O(D \sqrt{M} + MD \alpha) \label{eq:bound_sum_m}
+\end{align}
+
+\subsubsection*{Part 2: bounding the regret of online gradient descent in \cref{eq:decomp_sum}}
+For the second term in \eqref{eq:decomp_sum}, we choose $u_k$ strategically to extract the Goldstein subdifferential:
+\begin{align}
+u_k = -D \cdot \frac{\sum_{m=1}^M \nabla F(z_{(k-1)M+m})}{\|\sum_{m=1}^M \nabla F(z_{(k-1)M+m})\|} \label{eq:u_k_choice}
+\end{align}
+
+With this choice of $u_k$:
+\begin{align}
+\sum_{m=1}^M \langle \nabla F(z_{(k-1)M+m}), u_k \rangle &= -D \cdot \left\|\sum_{m=1}^M \nabla F(z_{(k-1)M+m})\right\| \label{eq:extract_norm}\\
+&= -D M \cdot \left\|\frac{1}{M}\sum_{m=1}^M \nabla F(z_{(k-1)M+m})\right\| \label{eq:avg_grad}
+\end{align}
+
+Substituting \eqref{eq:bound_sum_m} and \eqref{eq:avg_grad} into \eqref{eq:decomp_sum}, and then into \eqref{eq:sum_ineq}:
+\begin{align}
+F(x_0) - \inf F &\geq \sum_{k=1}^K \left[- O(D \sqrt{M}) - O(M D\alpha) + D M \cdot \left\|\frac{1}{M}\sum_{m=1}^M \nabla F(z_{(k-1)M+m})\right\|\right] \label{eq:rearranged_ineq}
+\end{align}
+
+Solving for the average over $k$:
+\begin{align}
+\frac{1}{K}\sum_{k=1}^K \left\|\frac{1}{M}\sum_{m=1}^M \nabla F(z_{(k-1)M+m})\right\| &\leq \frac{F(x_0) - \inf F}{D M K} + O(\frac{1}{\sqrt{M}}) + O(\alpha) \label{eq:avg_bound}
+\end{align}
+
+For the randomly chosen output $x_{\text{out}} \sim \text{Uniform}\{x_1, \ldots, x_K\}$:
+\begin{align}
+\mathbb{E}\left[\left\|\frac{1}{M}\sum_{m=1}^M \nabla F(z_{(k-1)M+m})\right\|\right] &\leq \frac{F(x_0) - \inf F}{D M K} + O(\frac{1}{\sqrt{M}}) + O(\alpha) \label{eq:expectation_bound}
+\end{align}
+
+
+The key insight is that these averages approximate the Goldstein subdifferential. Since $\|z_{(k-1)M+m} - x_k\| \leq M D \leq \delta$ (by our choice of $M = \lfloor\frac{\delta}{D}\rfloor$), we have:
+\begin{align}
+\nabla F(z_{(k-1)M+m}) \in \partial_\delta F(x_k) \text{ for all } m \in [M] \label{eq:subdiff_membership}
+\end{align}
+
+By convexity of the Goldstein subdifferential:
+\begin{align}
+\frac{1}{M}\sum_{m=1}^M \nabla F(z_{(k-1)M+m}) \in \partial_\delta F(x_k) \label{eq:avg_in_subdiff}
+\end{align}
+
+Therefore, from \eqref{eq:expectation_bound} and \eqref{eq:avg_in_subdiff}:
+\begin{align}
+\mathbb{E}[\text{dist}(0, \partial_\delta F(x_{\text{out}}))] &\leq \frac{F(x_0) - \inf F}{D M K} + \Theta\left(\frac{1}{\sqrt{M}}\right) + \Theta(\alpha) \label{eq:dist_bound}
+\end{align}
+To achieve $\mathbb{E}[\text{dist}(0, \partial_\delta F(x_{\text{out}}))] = \Theta(\epsilon)$, we set $\alpha = \Theta(\epsilon)$ and balance the remaining terms:
+\begin{align}
+\frac{F(x_0) - \inf F}{D M K} + \Theta\left(\frac{1}{\sqrt{M}}\right) \leq \epsilon \label{eq:constraint}
+\end{align}
+Let $C_0 = F(x_0) - \inf F$. We need both terms to be $\Theta(\epsilon)$:
+\begin{align}
+\frac{C_0}{DMK} &= \Theta(\epsilon) \label{eq:term1} \\
+\frac{1}{\sqrt{M}} &= \Theta(\epsilon) \label{eq:term2}
+\end{align}
+From \eqref{eq:term2}, we get:
+\begin{align}
+\frac{1}{\sqrt{M}} = \Theta(\epsilon) \implies M = \Theta\left(\frac{1}{\epsilon^2}\right)
+\end{align}
+Since $M = \lfloor\frac{\delta}{D}\rfloor$, we have $M \approx \frac{\delta}{D}$, which gives us:
+\begin{align}
+\frac{\delta}{D} = \Theta\left(\frac{1}{\epsilon^2}\right) \implies D = \Theta\left(\delta\epsilon^2\right)
+\end{align}
+Let's set $D = \Theta(\delta\epsilon^2)$ and $M = \Theta\left(\frac{1}{\epsilon^2}\right)$ to satisfy this constraint.
+From \eqref{eq:term1}, we can determine $K$:
+\begin{align}
+\frac{C_0}{DMK} = \Theta(\epsilon) \implies K = \Theta\left(\frac{C_0}{DM\epsilon}\right)
+\end{align}
+Substituting our choices for $D$ and $M$:
+\begin{align}
+K &= \Theta\left(\frac{C_0}{\delta\epsilon^2 \cdot \frac{1}{\epsilon^2} \cdot \epsilon}\right) \\
+&= \Theta\left(\frac{C_0}{\delta\epsilon}\right)
+\end{align}
+Let's set $K = \Theta\left(\frac{C_0}{\delta\epsilon}\right)$ to satisfy this constraint.
+For the step size $\eta$, we need to ensure stability of the algorithm. Based on standard analysis of stochastic gradient methods, we typically set:
+\begin{align}
+\eta = \Theta\left(\frac{D}{\sqrt{M}}\right) = \Theta\left(\delta\epsilon^2 \cdot \epsilon\right) = \Theta\left(\delta\epsilon^3\right)
+\end{align}
+Therefore, our final parameter settings are:
+\begin{align}
+D &= \Theta(\delta\epsilon^2) \\
+M &= \Theta\left(\frac{1}{\epsilon^2}\right) \\
+K &= \Theta\left(\frac{C_0}{\delta\epsilon}\right) \\
+\eta &= \Theta(\delta\epsilon^3)
+\end{align}
+
+Therefore, these parameter choices lead to $\mathbb{E}[\text{dist}(0, \partial_\delta F(x_{\text{out}}))] \leq \epsilon + O(\alpha)$
+
+\end{proof}
+
+\end{document}
