@@ -6,6 +6,7 @@ import time
 from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
+import cvxpy as cp
 
 class StronglyConvexBilevelProblem:
     """
@@ -101,50 +102,49 @@ class StronglyConvexBilevelProblem:
 
     def solve_lower_level(self, x: torch.Tensor, max_iter: int = 200, tol: float = 1e-8, y_linear_offset: Optional[torch.Tensor] = None, allow_grad: bool = False) -> Tuple[torch.Tensor, Dict]:
         """
-        Solve constrained lower level QP using KKT conditions (no penalty, no fallbacks)
+        Solve constrained lower level QP using CVXPy (no fallbacks)
 
         Problem: min_y 0.5 * y^T Q_lower y + (c_lower + P^T x + (y_linear_offset))^T y
                  s.t.  By ≥ Ax - b
 
         If y_linear_offset is provided (e.g., perturbation q), it is added to the linear term.
-
-        When allow_grad=True, keep autograd connection to x (useful for diagnostic or
-        algorithms that need ∂y*/∂x via autograd through the solver). Defaults to False
-        for numerical stability and paper-pure comparisons.
         """
-        x_det = x if allow_grad else x.detach()
+        # Detach x unless explicit gradient-through-solver is requested (not supported here)
+        x_det = x.detach()
 
-        # Problem data
-        Q = self.Q_lower  # Positive definite
-        d = self.c_lower + self.P.T @ x_det  # Linear term
-        if y_linear_offset is not None:
-            d = d + y_linear_offset
-        B = self.B  # Constraint matrix
-        c = self.A @ x_det - self.b  # Constraint RHS: By ≥ c
+        # Prepare problem data as numpy
+        Q = (self.Q_lower.detach().cpu().numpy() + self.Q_lower.detach().cpu().numpy().T) / 2.0
+        d_vec = (self.c_lower + self.P.T @ x_det + (y_linear_offset if y_linear_offset is not None else 0.0)).detach().cpu().numpy()
+        B = self.B.detach().cpu().numpy()
+        c_vec = (self.A @ x_det - self.b).detach().cpu().numpy()
 
-        # Method 1: Analytical KKT for small m
-        if self.num_constraints <= self.dim and self.num_constraints <= 10:
-            y_opt, lambda_opt, success = self._solve_kkt_analytical(Q, d, B, c, tol)
-            if success:
-                constraint_violation = float(torch.norm(torch.clamp(c - B @ y_opt, min=0)))
-                optimality_gap = float(torch.norm(Q @ y_opt + d - B.T @ lambda_opt))
-                # Determine active set from tight constraints at solution
-                constraint_values = B @ y_opt - c
-                active_mask = (constraint_values.abs() <= tol)
-                info = {
-                    'iterations': 1,
-                    'converged': True,
-                    'constraint_violation': constraint_violation,
-                    'optimality_gap': optimality_gap,
-                    'method': 'analytical_kkt',
-                    'lambda': lambda_opt.detach(),
-                    'active_mask': active_mask.detach()
-                }
-                return y_opt, info
+        # Define and solve QP
+        y_var = cp.Variable(self.dim)
+        objective = cp.Minimize(0.5 * cp.quad_form(y_var, Q) + d_vec @ y_var)
+        constraints = [B @ y_var >= c_vec]
+        problem = cp.Problem(objective, constraints)
+        problem.solve(solver=cp.SCS, verbose=False)
 
-        # Method 2: Projected gradient descent for larger problems
-        y_opt, info = self._solve_projected_gradient(Q, d, B, c, max_iter, tol)
-        return y_opt, info
+        if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            raise RuntimeError(f"CVXPy LL solve failed: status={problem.status}")
+
+        y_star = torch.tensor(y_var.value, device=self.device, dtype=self.dtype)
+        lambda_dual = torch.tensor(constraints[0].dual_value, device=self.device, dtype=self.dtype)
+
+        # Diagnostics info similar to previous outputs
+        constraint_violation = float(torch.norm(torch.clamp(torch.tensor(c_vec) - torch.tensor(B) @ y_star.cpu(), min=0)))
+        stationarity_residual = (self.Q_lower @ y_star + (self.c_lower + self.P.T @ x_det)) - self.B.T @ lambda_dual
+        optimality_gap = float(torch.norm(stationarity_residual))
+        info = {
+            'iterations': 1,
+            'converged': problem.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE] and constraint_violation < tol,
+            'constraint_violation': constraint_violation,
+            'optimality_gap': optimality_gap,
+            'method': 'cvxpy_scs',
+            'lambda': lambda_dual.detach(),
+            'active_mask': (self.B @ y_star - (self.A @ x_det - self.b)).abs() <= tol
+        }
+        return y_star, info
 
     def _solve_kkt_analytical(self, Q: torch.Tensor, d: torch.Tensor, B: torch.Tensor, c: torch.Tensor, tol: float) -> Tuple[torch.Tensor, torch.Tensor, bool]:
         """

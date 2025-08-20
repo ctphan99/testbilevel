@@ -4,7 +4,21 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple, Optional
 import time
+import cvxpy as cp
 from dataclasses import dataclass
+
+# Optional CVXPy/CvxpyLayer imports
+try:
+    import cvxpy as cp
+    try:
+        from cvxpylayers.torch import CvxpyLayer
+    except Exception:
+        CvxpyLayer = None
+    _CVXPY_AVAILABLE = True
+except Exception:
+    cp = None
+    CvxpyLayer = None
+    _CVXPY_AVAILABLE = False
 
 @dataclass
 class AlgorithmMetrics:
@@ -17,23 +31,33 @@ class AlgorithmMetrics:
     step_sizes: List[float]
     convergence_iter: Optional[int] = None
     final_gap: Optional[float] = None
-    
+
 class ConstrainedStochasticBilevelProblem:
     """
     Linearly constrained stochastic bilevel optimization problem
     Following the F2CSA paper specification:
-    
+
     min_{x ∈ X} F(x) := E[f(x, y*(x); ξ)]
     s.t. y*(x) ∈ argmin_{y: h(x,y) ≤ 0} E[g(x, y; ζ)]
-    
+
     where h(x,y) := Ax - By - b ≤ 0 (linear constraints)
+
+    Supports different inner solvers via `lower_solver`:
+      - 'pgd' (default): projected gradient descent (PyTorch)
+      - 'cvxpy': exact QP solve with CVXPy (retrieves duals)
+      - 'cvxpylayer': differentiable layer for y*(x) (no duals)
     """
-    
-    def __init__(self, dim: int = 10, num_constraints: int = 3, noise_std: float = 0.01, device: str = 'cpu'):
+
+    def __init__(self, dim: int = 10, num_constraints: int = 3, noise_std: float = 0.01, device: str = 'cpu', lower_solver: str = 'pgd'):
         self.dim = dim
         self.num_constraints = num_constraints
         self.noise_std = noise_std
         self.device = device
+        self.lower_solver = lower_solver.lower()
+
+        # Placeholders for CVXPy constructs
+        self._cvx_layer = None
+        self._cvx_built_for_dim = None
         
         # Upper level problem parameters (dimension-aware conditioning)
         if dim <= 10:
@@ -138,50 +162,35 @@ class ConstrainedStochasticBilevelProblem:
         h_values = self.constraint_function(x, y)
         return torch.all(h_values <= tolerance)
     
-    def solve_lower_level_constrained(self, x: torch.Tensor, seed: Optional[int] = None, 
+    def solve_lower_level_constrained(self, x: torch.Tensor, seed: Optional[int] = None,
                                     max_iter: int = 1000, tolerance: float = 1e-6) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Solve constrained lower level problem using projected gradient descent
-        Returns (y*, λ*) where λ* are the dual variables
+        Solve constrained lower level problem using CVXPy QP solve (no fallback).
+        Returns (y*, λ*) where λ* are the dual variables (from inequality constraints).
         """
-        if seed is not None:
-            torch.manual_seed(seed)
-        
-        # Initialize y
-        y = torch.randn(self.dim, device=self.device) * 0.1
-        lambda_dual = torch.zeros(self.num_constraints, device=self.device)
-        
-        # Projected gradient descent with dual updates
-        lr_primal = 0.01
-        lr_dual = 0.01
-        
-        for iteration in range(max_iter):
-            # Compute gradients
-            y_temp = y.clone().requires_grad_(True)
-            obj_val = self.lower_level_objective(x, y_temp, seed)
-            grad_y = torch.autograd.grad(obj_val, y_temp)[0]
-            
-            # Constraint values and gradients
-            h_values = self.constraint_function(x, y)
-            grad_h = -self.B  # ∇_y h(x,y) = -B
-            
-            # Primal update with dual correction
-            y_new = y - lr_primal * (grad_y + grad_h.T @ lambda_dual)
-            
-            # Dual update (gradient ascent on dual)
-            lambda_new = torch.clamp(lambda_dual + lr_dual * h_values, min=0.0)
-            
-            # Check convergence
-            primal_residual = torch.norm(y_new - y)
-            dual_residual = torch.norm(lambda_new - lambda_dual)
-            
-            y = y_new
-            lambda_dual = lambda_new
-            
-            if primal_residual < tolerance and dual_residual < tolerance:
-                break
-        
-        return y, lambda_dual
+        # Build QP in standard form:
+        #   minimize 0.5*y^T Q y + (c_lower + P^T x)^T y
+        #   subject to  B y >= c, with B = self.B, c = self.A x - self.b  (since h(x,y)=Ax - By - b <= 0)
+        y_var = cp.Variable(self.dim)
+        # Convert tensors to numpy
+        Q = (self.Q_lower.detach().cpu().numpy() + self.Q_lower.detach().cpu().numpy().T) / 2.0
+        d = (self.c_lower + self.P.T @ x).detach().cpu().numpy()
+        B = self.B.detach().cpu().numpy()
+        c_vec = (self.A @ x - self.b).detach().cpu().numpy()
+
+        objective = cp.Minimize(0.5 * cp.quad_form(y_var, Q) + d @ y_var)
+        constraints = [B @ y_var >= c_vec]
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver=cp.SCS, verbose=False)
+
+        if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            raise RuntimeError(f"CVXPy failed to solve lower-level QP: status={prob.status}")
+
+        y_star = torch.tensor(y_var.value, device=self.device, dtype=x.dtype)
+        # Duals for By >= c are nonnegative; CVXPy returns duals on constraints[0]
+        lam = constraints[0].dual_value
+        lambda_dual = torch.tensor(lam, device=self.device, dtype=x.dtype)
+        return y_star, lambda_dual
     
     def solve_lower_level(self, x: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
         """Solve lower level problem (returns only y* for compatibility)"""
