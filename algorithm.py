@@ -2,16 +2,23 @@
 import torch
 import numpy as np
 import time
+import cvxpy as cp
 from typing import Dict, Optional
 from problem import StronglyConvexBilevelProblem
 
 class F2CSA:
     """F2CSA (core, paper-aligned). See F2CSA.tex for step references."""
 
-    def __init__(self, problem: StronglyConvexBilevelProblem, N_g: int = 5, alpha: float = 0.3, adam_lr: float = 0.005):
+    def __init__(self, problem: StronglyConvexBilevelProblem, N_g: int = 5, alpha: float = 0.3, adam_lr: float = 0.005,
+                 noise_source: str = "gaussian", noise_kwargs: Optional[Dict] = None,
+                 inner_batch_size: Optional[int] = None):
         self.problem = problem
         self.N_g = N_g
         self.device = problem.device
+        # Noise model for stochastic oracle
+        self.noise_source = noise_source
+        self.noise_kwargs = noise_kwargs or {}
+        self.inner_batch_size = inner_batch_size
         # No helper toggles; keep core, paper-aligned implementation only
 
         # Initialize variables
@@ -23,9 +30,16 @@ class F2CSA:
         self.alpha1 = alpha**(-2)
         self.alpha2 = alpha**(-4)
         self.delta = alpha**3
+        # Paper gating parameters: τ = Θ(δ), ε_λ small > 0
+        self.tau_coeff = 5.0  # τ = tau_coeff * δ
+        self.eps_lambda = 1e-2
 
         # Optimizer (outer-level)
         self.optimizer = torch.optim.Adam([self.x], lr=adam_lr)
+
+        # Diagnostics storage (updated each iteration by hypergradient oracle)
+        self.last_debug: Dict = {}
+        self._diag_request: bool = False  # when True, compute extra component diagnostics
 
         print(f"F2CSA initialized: N_g={N_g}, α={alpha}, α1={self.alpha1:.3f}, α2={self.alpha2:.3f}, δ={self.delta:.3e}")
 
@@ -73,11 +87,32 @@ class F2CSA:
         # In the code we use a temperature τ to control smoothness; τ scales with δ=α^3.
         with torch.no_grad():
             h_y_star = self.problem.constraints(x, y_star)
-            # Fixed temperature τ (paper-aligned scaling with δ); no adaptation or hard gating
-            tau = max(5.0 * float(self.delta), 1e-3)
-            # Smooth gate via sigmoids on constraint values and duals; use λ̃ directly
-            sigma_h = torch.sigmoid(h_y_star / tau)
-            sigma_lam = torch.sigmoid(lam_tilde / tau)
+            # Piecewise gating per paper (Eq. after Alg. def): τ = Θ(δ), ε_λ > 0
+            tau = max(self.tau_coeff * float(self.delta), 1e-6)
+            # σ_h: 0 if z < -τδ, linear ramp to 1 on [-τδ, 0), then 1 if ≥ 0
+            z = h_y_star
+            thr = tau * float(self.delta)
+            sigma_h = torch.where(
+                z < -thr,
+                torch.zeros_like(z),
+                torch.where(
+                    z < 0,
+                    (thr + z) / (thr + 1e-12),
+                    torch.ones_like(z)
+                )
+            )
+            # σ_λ: 0 if ≤ 0, linear ramp on (0, ε_λ), 1 if ≥ ε_λ
+            el = torch.tensor(self.eps_lambda, device=z.device, dtype=z.dtype)
+            lam = lam_tilde
+            sigma_lam = torch.where(
+                lam <= 0,
+                torch.zeros_like(lam),
+                torch.where(
+                    lam < el,
+                    lam / (el + 1e-12),
+                    torch.ones_like(lam)
+                )
+            )
             rho = sigma_h * sigma_lam
 
         # ═══════════════════════════════════════════════════════════════════════════════════════
@@ -91,6 +126,19 @@ class F2CSA:
         #   - α₁ scales the "linearized" KKT residuals part; α₂ enforces constraints quadratically
         #   - Choosing α₁, α₂, δ in this way ensures bias O(α) and variance O(1/N_g)
         #   - δ regularization added to H improves numerical conditioning without violating δ-accuracy
+        # Build CVXPy penalized Lagrangian argmin over y with original constraints active
+        # Using Eq. 396–401 via problem helper for cleanliness
+        y_tilde_stats = self.problem.solve_f2csa_penalty_lagrangian(
+            x=x,
+            y_star=y_star,
+            lam_tilde=lam_tilde,
+            rho=rho,
+            alpha1=self.alpha1,
+            alpha2=self.alpha2,
+            batch_size=self.inner_batch_size,
+        )
+
+        # For diagnostics, also form H and rhs corresponding to the quadratic model
         Q = self.problem.Q_lower
         B = self.problem.B
         A = self.problem.A
@@ -98,18 +146,11 @@ class F2CSA:
         c_upper = self.problem.c_upper
         P = self.problem.P
         diag_rho = torch.diag(rho)
-
-        # Inner system matrix H for the minimization of L w.r.t. y (no δ ridge)
-        # H = α₁ Q + α₂ B^T diag(ρ) B
         H = self.alpha1 * Q + self.alpha2 * (B.T @ diag_rho @ B)
-        # Right-hand side derived from ∂L/∂y = 0 (for quadratic forms):
-        # Q terms from g, B terms from constraints, and linear terms from c_upper / c_lower / P^T x
         d_pen = (c_lower + P.T @ x)
         rhs = -c_upper - self.alpha1 * d_pen + self.alpha1 * (B.T @ lam_tilde) + self.alpha2 * (B.T @ (diag_rho @ (A @ x - self.problem.b)))
-        # Solve for ỹ(x) approximately (to δ-accuracy via the δ-regularized linear system)
-        y_tilde_stats = torch.linalg.solve(H, rhs)
 
-        # Diagnostics (to help debugging/maintenance): condition number, ρ stats, feasibility at ỹ
+        # Diagnostics (for logging in optimize): condition number, ρ stats, feasibility at ỹ
         try:
             H_cond = float(torch.linalg.cond(H).item())
         except Exception:
@@ -117,14 +158,33 @@ class F2CSA:
         h_y_tilde = self.problem.constraints(x, y_tilde_stats)
         max_pos_h_ytilde = float(torch.clamp(h_y_tilde, min=0).max().item())
         count_active_rho = int((rho > 0.9).sum().item())
+        rho_min = float(rho.min().item()) if rho.numel() > 0 else float('nan')
+        rho_max = float(rho.max().item()) if rho.numel() > 0 else float('nan')
+        rho_mean = float(rho.mean().item()) if rho.numel() > 0 else float('nan')
+        rho_std = float(rho.std().item()) if rho.numel() > 0 else float('nan')
+        rhs_norm = float(torch.norm(rhs).item())
+        y_tilde_norm = float(torch.norm(y_tilde_stats).item())
 
-        # Minimal debug hook (intentionally sparse to keep core clear)
+        # Store preliminary diag; will add gradient stats below
+        self.last_debug = {
+            'H_cond': H_cond,
+            'rho_min': rho_min, 'rho_max': rho_max, 'rho_mean': rho_mean, 'rho_std': rho_std,
+            'rho_active_count': count_active_rho,
+            'max_pos_h_ytilde': max_pos_h_ytilde,
+            'rhs_norm': rhs_norm,
+            'y_tilde_norm': y_tilde_norm,
+            'll_status': info.get('status', None),
+            'll_converged': info.get('converged', None),
+            'll_cv': info.get('constraint_violation', None),
+            'll_opt_gap': info.get('optimality_gap', None),
+        }
 
         # ═══════════════════════════════════════════════════════════════════════════════════════
         # STEP 4: Stochastic Hypergradient Estimation (Algorithm 1, lines 365–367)
         # ═══════════════════════════════════════════════════════════════════════════════════════
         # We form L_{λ̃,α}(x,y) explicitly and compute ∇_x L at y = ỹ(x). We repeat this N_g times
         # with independent stochastic draws to reduce variance (mini-batch averaging).
+        sample_norms = []
         for _ in range(self.N_g):
             # We need x to be a leaf w.r.t. autograd for ∇_x
             x_var = x.clone().requires_grad_(True)
@@ -148,10 +208,43 @@ class F2CSA:
             # Single-sample gradient w.r.t x at (x, y_tilde)
             L_val = L_pen_y(y_tilde.detach())
             g_x = torch.autograd.grad(L_val, x_var, create_graph=False, retain_graph=False)[0]
-            grads.append(g_x.detach())
+            g_x = g_x.detach()
+            grads.append(g_x)
+            sample_norms.append(float(torch.norm(g_x)))
 
         # Mini-batch averaging over N_g samples: variance ↓ as 1/N_g (Lemma 4)
         raw_grad = torch.mean(torch.stack(grads), dim=0)
+        raw_grad_norm = float(torch.norm(raw_grad))
+
+        # Component diagnostics at (x, y_tilde): split ∇_x f vs penalty parts
+        try:
+            x_comp = x.detach().clone().requires_grad_(True)
+            y_comp = y_tilde_stats.detach()
+            f_only = self.problem.upper_objective(x_comp, y_comp, add_noise=True)
+            grad_f = torch.autograd.grad(f_only, x_comp, create_graph=False, retain_graph=False)[0]
+            g_xy = self.problem.lower_objective(x_comp, y_comp, add_noise=True)
+            g_xystar = self.problem.lower_objective(x_comp, y_star.detach(), add_noise=True)
+            h_xy = self.problem.constraints(x_comp, y_comp)
+            term1 = self.alpha1 * (g_xy - g_xystar + (lam_tilde @ h_xy))
+            term2 = 0.5 * self.alpha2 * torch.sum(rho * (h_xy**2))
+            grad_term1 = torch.autograd.grad(term1, x_comp, create_graph=False, retain_graph=True)[0]
+            grad_term2 = torch.autograd.grad(term2, x_comp, create_graph=False, retain_graph=False)[0]
+            grad_f_norm = float(torch.norm(grad_f))
+            grad_t1_norm = float(torch.norm(grad_term1))
+            grad_t2_norm = float(torch.norm(grad_term2))
+        except Exception:
+            grad_f_norm = float('nan'); grad_t1_norm = float('nan'); grad_t2_norm = float('nan')
+
+        # Update diagnostics bundle
+        self.last_debug.update({
+            'raw_grad_norm': raw_grad_norm,
+            'sample_grad_norm_mean': float(np.mean(sample_norms)) if len(sample_norms) else float('nan'),
+            'sample_grad_norm_std': float(np.std(sample_norms)) if len(sample_norms) else float('nan'),
+            'sample_grad_norm_max': float(np.max(sample_norms)) if len(sample_norms) else float('nan'),
+            'comp_grad_f_norm': grad_f_norm,
+            'comp_grad_pen1_norm': grad_t1_norm,
+            'comp_grad_pen2_norm': grad_t2_norm,
+        })
 
         # Return the mini-batch averaged hypergradient (no EMA smoothing)
         return raw_grad
@@ -178,13 +271,14 @@ class F2CSA:
         initial_obj = float(self.problem.true_bilevel_objective(self.x))
         best_gap = float('inf')
 
+        prev_gap = None
         for iteration in range(max_iterations):
             # ── Step A: Call stochastic hypergradient oracle (Algorithm 1) ────────────────
             hypergradient = self.compute_hypergradient(self.x)
             grad_norm = float(torch.norm(hypergradient))
 
             # ── Step B: Gather diagnostics (LL constraint violation, objective, gap ≔ deterministic loss) ─
-            y_star, ll_info = self.problem.solve_lower_level(self.x)
+            y_star, ll_info = self.problem.solve_lower_level(self.x, batch_size=self.inner_batch_size)
             # Deterministic loss like deterministic.py: f(x, y*(x)) without stochastic noise
             bilevel_obj = float(self.problem.upper_objective(self.x, y_star, add_noise=False))
             gap = bilevel_obj
@@ -199,12 +293,33 @@ class F2CSA:
                 'constraint_violation': ll_info['constraint_violation'],
                 'alpha1': self.alpha1,
                 'alpha2': self.alpha2,
-                                'time': time.time() - start_time
+                'time': time.time() - start_time
             })
 
             # Periodic progress report
             if iteration % 100 == 0:
                 print(f"  F2CSA Iter {iteration:4d}: F(x)={bilevel_obj:8.4f}, Gap={gap:8.6f}, α₁={self.alpha1:.3f}")
+
+            # ── DIAGNOSTIC LOGGING ────────────────────────────────────────────────────────
+            gap_impr = (prev_gap - gap) if (prev_gap is not None) else 0.0
+            if (iteration % 50 == 0) or (prev_gap is not None and gap_impr < 1e-5):
+                d = getattr(self, 'last_debug', {}) or {}
+                # Step size info requires computing the parameter update; compute it around the step below
+                adam_lr = self.optimizer.param_groups[0]['lr'] if self.optimizer and self.optimizer.param_groups else float('nan')
+                # Print pre-step diagnostics (H, rho, gradient quality, components, LL solver)
+                print("[DIAG][F2CSA] it=%d gap=%.6e Δgap=%.3e |∇F|=%.3e |raw|=%.3e α1=%.3e α2=%.3e" % (
+                    iteration, gap, gap_impr, grad_norm, d.get('raw_grad_norm', float('nan')), self.alpha1, self.alpha2))
+                print("[DIAG][F2CSA][inner] cond(H)=%.3e |y_tilde|=%.3e |rhs|=%.3e" % (
+                    d.get('H_cond', float('nan')), d.get('y_tilde_norm', float('nan')), d.get('rhs_norm', float('nan'))))
+                print("[DIAG][F2CSA][gating] rho[min,mean,max,std]=[%.3e, %.3e, %.3e, %.3e] active(rho>0.9)=%s" % (
+                    d.get('rho_min', float('nan')), d.get('rho_mean', float('nan')), d.get('rho_max', float('nan')), d.get('rho_std', float('nan')), str(d.get('rho_active_count', 'na'))))
+                print("[DIAG][F2CSA][grad] samples: mean=%.3e std=%.3e max=%.3e" % (
+                    d.get('sample_grad_norm_mean', float('nan')), d.get('sample_grad_norm_std', float('nan')), d.get('sample_grad_norm_max', float('nan'))))
+                print("[DIAG][F2CSA][components] |grad_f|=%.3e |grad_pen_lin|=%.3e |grad_pen_quad|=%.3e" % (
+                    d.get('comp_grad_f_norm', float('nan')), d.get('comp_grad_pen1_norm', float('nan')), d.get('comp_grad_pen2_norm', float('nan'))))
+                print("[DIAG][F2CSA][LL] method=%s status=%s converged=%s cv=%.2e opt_gap=%.2e t=%.3fs" % (
+                    str(ll_info.get('method', 'cvxpy_scs')), str(ll_info.get('status', 'unknown')), str(ll_info.get('converged', False)), ll_info.get('constraint_violation', float('nan')), ll_info.get('optimality_gap', float('nan')), ll_info.get('solve_time_sec', float('nan'))))
+                print("[DIAG][F2CSA][adam] lr=%.3e (will print step after update)" % (adam_lr))
 
             # ── Step C: Convergence check (proxy gap) ─────────────────────────────────────
             if gap < convergence_threshold:
@@ -212,9 +327,16 @@ class F2CSA:
                 break
 
             # ── Step D: Update rule on x via Adam (no momentum smoothing) ─────────────────
+            x_prev = self.x.detach().clone()
             self.optimizer.zero_grad()
             self.x.grad = hypergradient
             self.optimizer.step()
+            step_norm = float(torch.norm(self.x.detach() - x_prev).item())
+            if (iteration % 50 == 0) or (prev_gap is not None and gap_impr < 1e-5):
+                tiny = step_norm < 1e-8
+                print("[DIAG][F2CSA][adam] step_norm=%.3e tiny=%s" % (step_norm, str(tiny)))
+
+            prev_gap = gap
 
         total_time = time.time() - start_time
 

@@ -21,10 +21,11 @@ class StronglyConvexBilevelProblem:
     - h(x,y) = Ax - By - b ≤ 0 (linear constraints)
     """
 
-    def __init__(self, dim: int = 100, num_constraints: int = 3, noise_std: float = 0.01, device: str = 'cpu', seed: int = 42):
+    def __init__(self, dim: int = 100, num_constraints: int = 3, noise_std: float = 0.01, device: str = 'cpu', seed: int = 42, noise_type: str = 'gaussian'):
         self.dim = dim
         self.num_constraints = num_constraints
         self.noise_std = noise_std
+        self.noise_type = noise_type  # 'gaussian', 'adversarial', 'custom'
         self.device = device
         self.dtype = torch.float64
         torch.set_default_dtype(self.dtype)
@@ -77,7 +78,7 @@ class StronglyConvexBilevelProblem:
         print(f"✅ Condition numbers: Upper={upper_eigenvals.max()/upper_eigenvals.min():.2f}, Lower={lower_eigenvals.max()/lower_eigenvals.min():.2f}")
 
     def upper_objective(self, x: torch.Tensor, y: torch.Tensor, add_noise: bool = True) -> torch.Tensor:
-        """Upper level objective with optional noise"""
+        """Upper level objective with optional Gaussian noise"""
         term1 = 0.5 * (x - self.x_target) @ self.Q_upper @ (x - self.x_target)
         term2 = self.c_upper @ y
 
@@ -87,7 +88,7 @@ class StronglyConvexBilevelProblem:
         return term1 + term2
 
     def lower_objective(self, x: torch.Tensor, y: torch.Tensor, add_noise: bool = True) -> torch.Tensor:
-        """Lower level objective with optional noise"""
+        """Lower level objective with optional Gaussian noise"""
         term1 = 0.5 * y @ self.Q_lower @ y
         term2 = (self.c_lower + self.P.T @ x) @ y
 
@@ -100,7 +101,9 @@ class StronglyConvexBilevelProblem:
         """Linear constraints h(x,y) = Ax - By - b"""
         return self.A @ x - self.B @ y - self.b
 
-    def solve_lower_level(self, x: torch.Tensor, max_iter: int = 200, tol: float = 1e-8, y_linear_offset: Optional[torch.Tensor] = None, allow_grad: bool = False) -> Tuple[torch.Tensor, Dict]:
+    def solve_lower_level(self, x: torch.Tensor, max_iter: int = 200, tol: float = 1e-8,
+                           y_linear_offset: Optional[torch.Tensor] = None, allow_grad: bool = False,
+                           batch_size: Optional[int] = None) -> Tuple[torch.Tensor, Dict]:
         """
         Solve constrained lower level QP using CVXPy (no fallbacks)
 
@@ -108,22 +111,33 @@ class StronglyConvexBilevelProblem:
                  s.t.  By ≥ Ax - b
 
         If y_linear_offset is provided (e.g., perturbation q), it is added to the linear term.
+        If batch_size is provided, inject stochasticity by sampling the linear term (mini-batch effect).
+        Constraints remain deterministic.
         """
         # Detach x unless explicit gradient-through-solver is requested (not supported here)
         x_det = x.detach()
 
         # Prepare problem data as numpy
         Q = (self.Q_lower.detach().cpu().numpy() + self.Q_lower.detach().cpu().numpy().T) / 2.0
-        d_vec = (self.c_lower + self.P.T @ x_det + (y_linear_offset if y_linear_offset is not None else 0.0)).detach().cpu().numpy()
+        d_base = (self.c_lower + self.P.T @ x_det + (y_linear_offset if y_linear_offset is not None else 0.0)).detach().cpu().numpy()
         B = self.B.detach().cpu().numpy()
         c_vec = (self.A @ x_det - self.b).detach().cpu().numpy()
 
-        # Define and solve QP
+        # Define and solve QP (parameterized if batch_size provided)
         y_var = cp.Variable(self.dim)
-        objective = cp.Minimize(0.5 * cp.quad_form(y_var, Q) + d_vec @ y_var)
+        d_param = cp.Parameter(self.dim)
+        objective = cp.Minimize(0.5 * cp.quad_form(y_var, Q) + d_param.T @ y_var)
         constraints = [B @ y_var >= c_vec]
         problem = cp.Problem(objective, constraints)
+        import time as _time
+        _t0 = _time.time()
+        if batch_size is None:
+            d_param.value = d_base
+        else:
+            noise_scale = float(self.noise_std) / max(1.0, np.sqrt(batch_size))
+            d_param.value = d_base + np.random.randn(*d_base.shape) * noise_scale
         problem.solve(solver=cp.SCS, verbose=False)
+        _solve_time = _time.time() - _t0
 
         if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
             raise RuntimeError(f"CVXPy LL solve failed: status={problem.status}")
@@ -137,12 +151,14 @@ class StronglyConvexBilevelProblem:
         optimality_gap = float(torch.norm(stationarity_residual))
         info = {
             'iterations': 1,
+            'status': problem.status,
             'converged': problem.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE] and constraint_violation < tol,
             'constraint_violation': constraint_violation,
             'optimality_gap': optimality_gap,
             'method': 'cvxpy_scs',
             'lambda': lambda_dual.detach(),
-            'active_mask': (self.B @ y_star - (self.A @ x_det - self.b)).abs() <= tol
+            'active_mask': (self.B @ y_star - (self.A @ x_det - self.b)).abs() <= tol,
+            'solve_time_sec': _solve_time
         }
         return y_star, info
 
@@ -502,6 +518,93 @@ class StronglyConvexBilevelProblem:
             implicit_component[i] = torch.dot(dy_dxi, grad_y)
         total_grad = grad_x_direct + implicit_component
         return total_grad.detach(), grad_x_direct.detach(), implicit_component.detach()
+
+
+    # -------------------------------------------------------------------------
+    # F2CSA Algorithm 1: Complete penalty Lagrangian solver
+    # -------------------------------------------------------------------------
+    def solve_f2csa_penalty_lagrangian(self, x: torch.Tensor, y_star: torch.Tensor,
+                                       lam_tilde: torch.Tensor, rho: torch.Tensor,
+                                       alpha1: float, alpha2: float,
+                                       batch_size: Optional[int] = None) -> torch.Tensor:
+        """
+        Solve the F2CSA penalty Lagrangian minimization over y using CVXPy.
+
+        Implements Eq. 396-401: L_{λ̃,α}(x,y) = f(x,y) + α₁[g(x,y) - g(x,y*) + λ̃ᵀh(x,y)] + (α₂/2)Σᵢρᵢhᵢ(x,y)²
+        Subject to: h(x,y) ≤ 0 (original constraints remain active)
+
+        Args:
+            x: Current upper-level variable
+            y_star: Reference lower-level solution y*(x)
+            lam_tilde: Reference dual variables λ̃(x)
+            rho: Constraint gating weights ρᵢ(x)
+            alpha1, alpha2: F2CSA penalty parameters
+
+        Returns:
+            ỹ(x): Optimal y minimizing the penalty Lagrangian
+        """
+        # Convert to numpy for CVXPy
+        x_np = x.detach().cpu().numpy()
+        y_star_np = y_star.detach().cpu().numpy()
+        lam_np = lam_tilde.detach().cpu().numpy()
+        rho_np = rho.detach().cpu().numpy()
+
+        # Problem matrices (symmetrized for numerical stability)
+        Ql = (self.Q_lower.detach().cpu().numpy() + self.Q_lower.detach().cpu().numpy().T) / 2.0
+        Qu = (self.Q_upper.detach().cpu().numpy() + self.Q_upper.detach().cpu().numpy().T) / 2.0
+        P_np = self.P.detach().cpu().numpy()
+        A_np = self.A.detach().cpu().numpy()
+        B_np = self.B.detach().cpu().numpy()
+        b_np = self.b.detach().cpu().numpy()
+        c_lower_np = self.c_lower.detach().cpu().numpy()
+        c_upper_np = self.c_upper.detach().cpu().numpy()
+        x_target_np = self.x_target.detach().cpu().numpy()
+
+        # CVXPy variable and parameters for stochastic objective coefficients
+        y_cp = cp.Variable(self.dim)
+        q_lin_param = cp.Parameter(self.dim)  # stochastic linear term for g
+        c_upper_param = cp.Parameter(self.dim)  # stochastic linear term in f wrt y
+
+        # Build F2CSA penalty objective components
+        # f(x,y) = 0.5*(x - x_target)ᵀQ_upper(x - x_target) + c_upperᵀy
+        f_const = 0.5 * (x_np - x_target_np).T @ Qu @ (x_np - x_target_np)
+        f_cp = f_const + c_upper_param.T @ y_cp
+
+        # g(x,y) = 0.5*yᵀQ_lower*y + (c_lower + Pᵀx)ᵀy
+        q_lin_base = c_lower_np + P_np.T @ x_np
+        g_cp = 0.5 * cp.quad_form(y_cp, Ql) + q_lin_param.T @ y_cp
+        g_opt_cp = 0.5 * y_star_np.T @ Ql @ y_star_np + q_lin_param.T @ y_star_np
+
+        # Stochastic injection for f and g linear terms if batch_size provided
+        if batch_size is None:
+            q_lin_param.value = q_lin_base
+            c_upper_param.value = c_upper_np
+        else:
+            noise_scale = float(self.noise_std) / max(1.0, np.sqrt(batch_size))
+            q_lin_param.value = q_lin_base + np.random.randn(*q_lin_base.shape) * noise_scale
+            c_upper_param.value = c_upper_np + np.random.randn(*c_upper_np.shape) * noise_scale
+
+        # h(x,y) = Ax - By - b ≤ 0 (deterministic)
+        h_cp = A_np @ x_np - B_np @ y_cp - b_np
+        h_opt_cp = A_np @ x_np - B_np @ y_star_np - b_np
+
+        # F2CSA penalty Lagrangian (Eq. 396-401)
+        linear_penalty = g_cp - g_opt_cp + lam_np.T @ h_cp
+        quadratic_penalty = cp.sum(cp.multiply(rho_np, cp.square(h_cp)))
+
+        objective = cp.Minimize(
+            f_cp + alpha1 * linear_penalty + 0.5 * alpha2 * quadratic_penalty
+        )
+
+        # Solve with original constraints active
+        constraints = [h_cp <= 0]
+        problem = cp.Problem(objective, constraints)
+        problem.solve(solver=cp.SCS, verbose=False)
+
+        if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
+            raise RuntimeError(f"F2CSA penalty Lagrangian solve failed: status={problem.status}")
+
+        return torch.tensor(y_cp.value, device=self.device, dtype=self.dtype)
 
 
     print(f"   F2CSA: Enhanced with all improvements")

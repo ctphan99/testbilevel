@@ -133,10 +133,12 @@ def run_comprehensive_convergence_test():
 
     device = 'cpu'
 
-    # Create single problem instance for all algorithms
+    # Create single problem instance for all algorithms (dim and constraints overridable via env)
+    dim = int(os.getenv('PROB_DIM', '100'))
+    num_cons = int(os.getenv('PROB_NUM_CONS', '20'))
     problem = StronglyConvexBilevelProblem(
-        dim=100,
-        num_constraints=20,
+        dim=dim,
+        num_constraints=num_cons,
         device=device,
         seed=42,
         noise_std=0.0001
@@ -442,42 +444,9 @@ def run_comprehensive_convergence_test():
                         if cos_fd < 0.9:
                             print("      ⚠️  [fd-probe] Surrogate bias likely dominates: cosine < 0.9 persistently")
 
-            # Paper-pure mode: skip any behavioral modifications to F2CSA
-            if paper_pure:
-                pass
-            else:
-                # Increase penalties and tighten smoothing/regularization conservatively
-                f2.alpha1 *= 100.0  # stronger push toward exactness
-                f2.alpha2 *= 100.0
-
-                # Switch F2CSA optimizer to SGD with fixed lr and increase N_g for stronger signal
-                try:
-                    f2.switch_to_sgd(lr=1e-3)
-                    f2.N_g = max(getattr(f2, 'N_g', 30), 50)
-                    # Apply de-bias flag if requested via env
-                    if os.getenv('F2CSA_DEBIAS_ACTIVES', '0') == '1' and hasattr(f2, 'penalize_inactive_only'):
-                        f2.penalize_inactive_only = True
-                        print("   🔧 [DIAG] F2CSA: penalize_inactive_only=True (drop quad penalty on actives)")
-                except Exception as e:
-                    print(f"   🔧 [DIAG] F2CSA SGD switch failed: {e}")
-
-                # Reduce smoothing and adjust gating under KKT-limit
-                f2.tau_factor = max(0.5, f2.tau_factor / 4.0)  # reduce smoothing
-                f2.tau_min = max(1e-6, f2.tau_min / 100.0)
-                f2.delta = max(1e-6, f2.delta / 10.0)
-                # Disable λ EMA gating and switch to actives-only gating under KKT-limit
-                if hasattr(f2, 'disable_lam_ema'):
-                    f2.disable_lam_ema = True
-                if hasattr(f2, 'actives_only_gating'):
-                    f2.actives_only_gating = True
-                # Ensure optimizer is SGD with sufficient N_g
-                try:
-                    f2.switch_to_sgd(lr=1e-3)
-                    f2.N_g = max(getattr(f2, 'N_g', 30), 50)
-                    sgd_note = f"switched_to_sgd=True, sgd_lr={1e-3:.1e}, N_g={f2.N_g}"
-                except Exception:
-                    sgd_note = "switched_to_sgd=False"
-                print(f"   🔧 [DIAG] F2CSA KKT-limit: α1={f2.alpha1:.3e}, α2={f2.alpha2:.3e}, τ_factor={f2.tau_factor:.3e}, τ_min={f2.tau_min:.1e}, δ={f2.delta:.1e}, disable_lam_ema={getattr(f2,'disable_lam_ema', False)}, actives_only_gating={getattr(f2,'actives_only_gating', False)}, {sgd_note}")
+            # Paper-pure mode or core-only F2CSA: do not modify algorithm parameters at KKT-limit
+            # Keep only the finite-difference probe above; skip behavioral tweaks entirely.
+            pass
 
         # Run one iteration for each algorithm
         for alg_name, algorithm in algorithm_instances.items():
@@ -783,6 +752,12 @@ def run_comprehensive_convergence_test():
                             print(f"   last FD-cos(F2CSA, FD-5D)={last_fd:.4f}")
                         if last_probe is not None:
                             print(f"   last probe cos({last_probe['ref']},{last_probe['other']})={last_probe['cos']:.4f} |ref|={last_probe['ref_norm']:.3e} |other|={last_probe['other_norm']:.3e}")
+
+        # Simple stuck-stop: if F2CSA gap improves < 1e-3 over last 100 iterations, stop silently
+        f2_data_stuck = monitor.algorithm_data.get('F2CSA', None)
+        if f2_data_stuck and len(f2_data_stuck['gaps']) > 100:
+            if (f2_data_stuck['gaps'][-101] - f2_data_stuck['gaps'][-1]) < 1e-3:
+                break
 
         # Progress reporting
         if iteration % 50 == 0 or iteration < 10:
