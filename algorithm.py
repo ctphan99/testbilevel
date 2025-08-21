@@ -2,6 +2,7 @@
 import torch
 import numpy as np
 import time
+import math
 import cvxpy as cp
 from typing import Dict, Optional
 from problem import StronglyConvexBilevelProblem
@@ -41,7 +42,7 @@ class F2CSA:
         self.last_debug: Dict = {}
         self._diag_request: bool = False  # when True, compute extra component diagnostics
 
-        print(f"F2CSA initialized: N_g={N_g}, α={alpha}, α1={self.alpha1:.3f}, α2={self.alpha2:.3f}, δ={self.delta:.3e}")
+        print(f"F2CSA initialized: N_g={N_g}, alpha={alpha}, alpha1={self.alpha1:.3f}, alpha2={self.alpha2:.3f}, delta={self.delta:.3e}")
 
     def compute_hypergradient(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -279,9 +280,9 @@ class F2CSA:
 
             # ── Step B: Gather diagnostics (LL constraint violation, objective, gap ≔ deterministic loss) ─
             y_star, ll_info = self.problem.solve_lower_level(self.x, batch_size=self.inner_batch_size)
-            # Deterministic loss like deterministic.py: f(x, y*(x)) without stochastic noise
+            # Deterministic objective (can be negative). Our stationarity gap is ||∇F(x)||.
             bilevel_obj = float(self.problem.upper_objective(self.x, y_star, add_noise=False))
-            gap = bilevel_obj
+            gap = grad_norm  # Stationarity gap (nonnegative)
             best_gap = min(best_gap, gap)
 
             # Persist iteration history for analysis and debugging
@@ -351,6 +352,108 @@ class F2CSA:
             'total_time': total_time,
             'converged': gap < convergence_threshold,
             'history': history
+        }
+
+    def optimize_nonsmooth(self, max_iterations: int = 1000, eta: Optional[float] = None,
+                            D_clip: Optional[float] = None, log_every: int = 100,
+                            schedule: str = 'constant', eta0: Optional[float] = None,
+                            decay_power: float = 0.5, exp_gamma: float = 1e-3) -> Dict:
+        """
+        Algorithm 2 (paper): Nonsmooth nonconvex method with Goldstein-style update.
+        Uses z = x_base + s * Δ and clipped Δ updates: Δ <- clip_D(Δ - η_t * g(z)).
+
+        - Keeps the same stochastic hypergradient oracle (compute_hypergradient)
+        - Does not use Adam; manages (x_base, Δ) directly per the paper
+        - By default, D_clip = delta = alpha^3 (paper alignment), eta falls back to Adam LR
+        - schedule controls adaptive step size:
+            * 'constant': η_t = eta (default)
+            * 'poly':     η_t = (eta0 or eta) * (1 + t)^(-decay_power)
+            * 'exp':      η_t = (eta0 or eta) * exp(-exp_gamma * t)
+        """
+        # Initialize base point and displacement
+        x_base = self.x.detach().clone()
+        delta_vec = torch.zeros_like(self.x)
+        # Step size and clip radius
+        if eta is None:
+            eta = float(self.optimizer.param_groups[0]['lr']) if self.optimizer and self.optimizer.param_groups else 5e-3
+        if D_clip is None:
+            D_clip = float(self.delta)  # paper suggests D = Θ(delta)
+
+        start_time = time.time()
+        history = []
+        best_gap = float('inf')
+        bilevel_obj = float('nan')
+        gap = float('inf')
+
+        for t in range(max_iterations):
+            # Current iterate and Goldstein evaluation point
+            x_cur = (x_base + delta_vec).detach()
+            s = float(torch.rand(1))
+            z = (x_base + s * delta_vec).detach()
+
+            # Oracle at z
+            g = self.compute_hypergradient(z)
+            g_norm = float(torch.norm(g))
+
+            # Adaptive step size
+            if schedule == 'constant':
+                eta_t = eta
+            elif schedule == 'poly':
+                base_eta = eta0 if (eta0 is not None) else eta
+                eta_t = base_eta * (1.0 + t) ** (-decay_power)
+            elif schedule == 'exp':
+                base_eta = eta0 if (eta0 is not None) else eta
+                eta_t = base_eta * math.exp(-exp_gamma * t)
+            else:
+                eta_t = eta
+
+            # Deterministic diagnostics at x_cur
+            y_star, ll_info = self.problem.solve_lower_level(x_cur, batch_size=self.inner_batch_size)
+            bilevel_obj = float(self.problem.upper_objective(x_cur, y_star, add_noise=False))
+            gap = g_norm  # Stationarity gap (nonnegative)
+            best_gap = min(best_gap, gap)
+
+            # Log
+            history.append({
+                'iteration': t,
+                'bilevel_objective': bilevel_obj,
+                'gap': gap,
+                'gradient_norm': g_norm,
+                'constraint_violation': ll_info['constraint_violation'],
+                'alpha1': self.alpha1,
+                'alpha2': self.alpha2,
+                'time': time.time() - start_time
+            })
+            if (t % log_every) == 0:
+                print(f"[NS] it={t:4d} F={bilevel_obj:8.6f} gap={gap:8.6f} |g|={g_norm:7.4e} D={D_clip:.3e} eta={eta:.3e}")
+
+            # Δ update with clipping
+            with torch.no_grad():
+                delta_vec = delta_vec - eta_t * g
+                dn = float(torch.norm(delta_vec))
+                if dn > D_clip:
+                    delta_vec = delta_vec * (D_clip / (dn + 1e-12))
+
+            # Advance base point as in Algorithm 2: x_t = x_{t-1} + Δ_t (use updated Δ_t)
+            x_base = (x_base + delta_vec).detach()
+
+        total_time = time.time() - start_time
+        # Update the class's x to the last iterate
+        self.x = (x_base + delta_vec).detach().clone().requires_grad_(True)
+
+        return {
+            'algorithm': 'F2CSA-NS',
+            'final_objective': bilevel_obj,
+            'final_gap': gap,
+            'best_gap': best_gap,
+            'initial_objective': history[0]['bilevel_objective'] if history else float('nan'),
+            'objective_improvement': (gap - history[0]['gap']) if history else float('nan'),
+            'total_iterations': len(history),
+            'total_time': total_time,
+            'converged': False,
+            'history': history,
+            'eta': eta,
+            'D_clip': D_clip,
         }
 
 class SSIGD:

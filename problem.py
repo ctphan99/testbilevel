@@ -66,16 +66,16 @@ class StronglyConvexBilevelProblem:
         # Verify feasibility at origin
         origin_constraint = -self.b  # Since Ax - By = 0 at origin
         max_violation = torch.max(origin_constraint)
-        print(f"✅ Constraint feasibility at origin: max_violation = {max_violation:.6f} (should be ≤ 0)")
+        print(f"Constraint feasibility at origin: max_violation = {max_violation:.6f} (should be <= 0)")
 
         # Verify strong convexity
         upper_eigenvals = torch.linalg.eigvals(self.Q_upper).real
         lower_eigenvals = torch.linalg.eigvals(self.Q_lower).real
 
-        print(f"📊 Strongly Convex Bilevel Problem (dim={dim}, constraints={num_constraints})")
-        print(f"✅ Upper level strong convexity: λ_min={upper_eigenvals.min():.3f}, λ_max={upper_eigenvals.max():.3f}")
-        print(f"✅ Lower level strong convexity: λ_min={lower_eigenvals.min():.3f}, λ_max={lower_eigenvals.max():.3f}")
-        print(f"✅ Condition numbers: Upper={upper_eigenvals.max()/upper_eigenvals.min():.2f}, Lower={lower_eigenvals.max()/lower_eigenvals.min():.2f}")
+        print(f"Strongly Convex Bilevel Problem (dim={dim}, constraints={num_constraints})")
+        print(f"Upper level strong convexity: lambda_min={upper_eigenvals.min():.3f}, lambda_max={upper_eigenvals.max():.3f}")
+        print(f"Lower level strong convexity: lambda_min={lower_eigenvals.min():.3f}, lambda_max={lower_eigenvals.max():.3f}")
+        print(f"Condition numbers: Upper={upper_eigenvals.max()/upper_eigenvals.min():.2f}, Lower={lower_eigenvals.max()/lower_eigenvals.min():.2f}")
 
     def upper_objective(self, x: torch.Tensor, y: torch.Tensor, add_noise: bool = True) -> torch.Tensor:
         """Upper level objective with optional Gaussian noise"""
