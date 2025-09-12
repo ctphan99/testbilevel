@@ -46,8 +46,6 @@ class F2CSAAlgorithm:
         # Stabilization buffers
         self.grad_ema: Optional[torch.Tensor] = None
         self.grad_ema_beta: float = 0.90 if grad_ema_beta_override is None else float(grad_ema_beta_override)
-        self.x_ema: Optional[torch.Tensor] = None
-        self.x_ema_beta: float = 0.99
         self.prox_weight: float = 0.03 if prox_weight_override is None else float(prox_weight_override)
         self.eta_override = 8e-6 if eta_override is None else float(eta_override)
         self.D_override = 1.25e-2 if D_override is None else float(D_override)
@@ -92,17 +90,6 @@ class F2CSAAlgorithm:
         """
         return self.problem.compute_gap(x)
 
-    def apply_adabelief(self, gradient: torch.Tensor, iteration: int) -> torch.Tensor:
-        self.adabelief_m = self.adabelief_beta1 * self.adabelief_m + (1 - self.adabelief_beta1) * gradient
-        grad_residual = gradient - self.adabelief_m
-        self.adabelief_v = self.adabelief_beta2 * self.adabelief_v + \
-                           (1 - self.adabelief_beta2) * (grad_residual ** 2) + self.adabelief_eps
-        beta1_t = self.adabelief_beta1 ** (iteration + 1)
-        beta2_t = self.adabelief_beta2 ** (iteration + 1)
-        m_t_hat = self.adabelief_m / (1 - beta1_t)
-        v_t_hat = self.adabelief_v / (1 - beta2_t)
-        adabelief_step = m_t_hat / (torch.sqrt(v_t_hat) + self.adabelief_eps)
-        return adabelief_step
 
     # ------------------------ validation helpers (Algorithm 1) ------------------------
     def oracle_sample(self, x: torch.Tensor, alpha: float, N_g: int) -> torch.Tensor:
@@ -242,11 +229,6 @@ class F2CSAAlgorithm:
             'technique': {}
         }
 
-        self.adabelief_m = torch.zeros(config['dim'], device=self.device, dtype=torch.float64)
-        self.adabelief_v = torch.zeros(config['dim'], device=self.device, dtype=torch.float64)
-        self.adabelief_beta1 = 0.9
-        self.adabelief_beta2 = 0.999
-        self.adabelief_eps = 1e-8
 
         if self.problem is None:
             self.problem = self.create_problem(
@@ -269,7 +251,6 @@ class F2CSAAlgorithm:
         # Using paper's fixed-step update; no external optimizer or scheduler
 
         delta = torch.zeros(dim, device=self.device, dtype=problem.dtype)
-        ema_decay = 0.99
         ema_gap = None
         ema_gap_history: List[float] = []
         gap_history: List[float] = []
@@ -369,7 +350,7 @@ class F2CSAAlgorithm:
                                 y = torch.as_tensor(last_ll_y_np, device=self.device, dtype=problem.dtype, requires_grad=True)
                             except Exception:
                                 pass
-                        optimizer_ll = torch.optim.SGD([y], lr=self.ll_sgd_lr, momentum=self.ll_sgd_momentum) ####*****repetitive sgd momentum
+                        optimizer_ll = torch.optim.SGD([y], lr=self.ll_sgd_lr, momentum=self.ll_sgd_momentum)  # Effective technique ####*****repetitive sgd momentum
                         for _ in range(self.ll_sgd_steps):
                             optimizer_ll.zero_grad()
                             quad = 0.5 * (y @ (Q @ y))
@@ -496,17 +477,20 @@ class F2CSAAlgorithm:
                 # Combine gradients
                 gradient = grad_f + grad_penalty
 
-                # Gradient EMA for stabilization
+                # Gradient EMA for stabilization - DISABLED FOR TESTING
+                # if self.grad_ema is None:
+                #     self.grad_ema = torch.zeros_like(gradient)
+                # self.grad_ema = self.grad_ema_beta * self.grad_ema + (1 - self.grad_ema_beta) * gradient
+                # stabilized_grad = self.grad_ema
+                
+                # Gradient EMA for stabilization (effective technique)
                 if self.grad_ema is None:
                     self.grad_ema = torch.zeros_like(gradient)
                 self.grad_ema = self.grad_ema_beta * self.grad_ema + (1 - self.grad_ema_beta) * gradient
                 stabilized_grad = self.grad_ema
 
-                # Proximal pull toward EMA of iterates
-                if self.x_ema is None:
-                    self.x_ema = x.detach().clone()
-                self.x_ema = self.x_ema_beta * self.x_ema + (1 - self.x_ema_beta) * x.detach()
-                prox_term = self.prox_weight * (x.detach() - self.x_ema)
+                # Proximal pull toward EMA of iterates - REMOVED (ineffective)
+                prox_term = torch.zeros_like(x)
 
                 # The smooth_activation function is now part of the Lagrangian, so the explicit multiplication is removed.
 
@@ -550,10 +534,8 @@ class F2CSAAlgorithm:
 
                 # Fixed step size per paper; no adaptive LR scheduling
 
-                if ema_gap is None:
-                    ema_gap = current_gap
-                else:
-                    ema_gap = ema_decay * ema_gap + (1 - ema_decay) * current_gap
+                # Gap EMA - REMOVED (ineffective)
+                ema_gap = current_gap
                 ema_gap_history.append(float(ema_gap))
 
                 # No scheduler step; fixed η per paper
