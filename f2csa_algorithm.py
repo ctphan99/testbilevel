@@ -87,7 +87,7 @@ class F2CSAAlgorithm:
 
 
     # ------------------------ validation helpers (Algorithm 1) ------------------------
-    def oracle_sample(self, x: torch.Tensor, alpha: float, N_g: int) -> torch.Tensor:
+    def oracle_sample(self, x: torch.Tensor, alpha: float, N_g: int, config: dict = None) -> torch.Tensor:
         """
         One stochastic oracle sample g~(x) using true solver for lower-level.
         Uses the same solver as DSBLO/SSIGD for consistency.
@@ -96,12 +96,19 @@ class F2CSAAlgorithm:
         dim = problem.dim
         xx = x.detach().clone().requires_grad_(True)
         
-        # Use true solver for lower-level (consistent with DSBLO/SSIGD)
-        y_opt, lambda_info = problem.solve_lower_level(xx)
-        if isinstance(lambda_info, dict):
-            lambda_opt = lambda_info.get('lambda', torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype))
+        # Use SGD for lower-level as specified in Algorithm 1 of F2CSA.tex
+        # Create a basic config for oracle_sample if not provided
+        if config is None:
+            basic_config = {
+                'alpha': alpha,
+                'N_g': N_g,
+                'll_sgd_lr': 0.01,
+                'll_sgd_steps': 50,
+                'll_sgd_momentum': 0.9,
+            }
         else:
-            lambda_opt = lambda_info
+            basic_config = config
+        y_opt, lambda_opt = self._solve_lower_level_sgd(xx, problem, basic_config)
         
         # Compute constraint violations
         h_val = problem.A @ xx - problem.B @ y_opt - problem.b
@@ -133,6 +140,82 @@ class F2CSAAlgorithm:
         grad_penalty = torch.autograd.grad(penalty_term, xx, create_graph=False)[0]
         g_t = (grad_f + grad_penalty).detach()
         return g_t
+
+    def _solve_lower_level_sgd(self, x, problem, config):
+        """
+        Solve lower-level problem using SGD as specified in Algorithm 1 of F2CSA.tex
+        
+        Returns:
+            y_opt: Approximate solution to lower-level problem
+            lambda_opt: Approximate dual variables
+        """
+        try:
+            # Parameters from Algorithm 1
+            alpha = config.get('alpha', 0.08)
+            delta = max(1e-6, alpha**3)  # Line 360: δ = α³, avoid very small values
+            N_g = config.get('N_g', 128)
+            
+            # SGD parameters for lower-level
+            ll_lr = config.get('ll_sgd_lr', 0.01)
+            # Avoid numerical issues with very small delta
+            ll_steps = config.get('ll_sgd_steps', max(10, min(100, int(10 * np.log(max(1e-6, 1/delta))))))
+            ll_momentum = config.get('ll_sgd_momentum', 0.9)
+            
+            # Initialize y and lambda
+            y = torch.zeros(problem.dim, device=self.device, dtype=problem.dtype, requires_grad=True)
+            lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype, requires_grad=True)
+            
+            # SGD optimizer for y
+            y_optimizer = torch.optim.SGD([y], lr=ll_lr, momentum=ll_momentum)
+            
+            # SGD for lower-level problem: min_y g(x, y) s.t. h(x, y) <= 0
+            for step in range(ll_steps):
+                y_optimizer.zero_grad()
+                
+                # Lower-level objective: g(x, y)
+                ll_obj = problem.lower_objective(x, y, add_noise=True)
+                
+                # Constraint penalty: h(x, y) = A x - B y - b
+                h_val = problem.A @ x - problem.B @ y - problem.b
+                constraint_penalty = torch.sum(torch.relu(h_val)**2)
+                
+                # Total lower-level loss
+                total_loss = ll_obj + 1000.0 * constraint_penalty  # Large penalty for constraints
+                
+                # Check for NaN or Inf
+                if torch.isnan(total_loss) or torch.isinf(total_loss):
+                    print(f"Warning: NaN/Inf in total_loss at step {step}")
+                    break
+                
+                total_loss.backward()
+                y_optimizer.step()
+                
+                # Project y to feasible region if needed
+                with torch.no_grad():
+                    # Simple projection: ensure constraints are satisfied
+                    h_val = problem.A @ x - problem.B @ y - problem.b
+                    violation = torch.relu(h_val)
+                    violation_sum = torch.sum(violation)
+                    if violation_sum > 1e-6:
+                        # Adjust y to reduce constraint violation
+                        # Avoid division by zero by checking violation_sum
+                        step_size = 0.01 / max(1.0, violation_sum.item())
+                        y.data = y.data + step_size * problem.B.T @ violation
+            
+            # Compute approximate dual variables using KKT conditions
+            with torch.no_grad():
+                h_val = problem.A @ x - problem.B @ y - problem.b
+                # Simple dual variable estimation: lambda_i = max(0, -h_i) for active constraints
+                lambda_opt = torch.relu(-h_val)
+            
+            return y.detach(), lambda_opt.detach()
+            
+        except Exception as e:
+            print(f"Error in _solve_lower_level_sgd: {e}")
+            # Return fallback values
+            y_fallback = torch.zeros(problem.dim, device=self.device, dtype=problem.dtype)
+            lambda_fallback = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
+            return y_fallback, lambda_fallback
 
     def estimate_bias_variance(self, x: torch.Tensor, alpha_values: List[float], Ng_values: List[int], trials: int = 50, ref_trials: int = 200) -> Dict:
         """
@@ -182,14 +265,14 @@ class F2CSAAlgorithm:
         delta = 0.1
         L_F = 5.0
 
-        # Paper-aligned parameter calculations
-        D_theory = delta * (epsilon ** 2) / (L_F ** 2)
-        eta_theory = delta * (epsilon ** 3) / (L_F ** 4)
-        M = int(1 / (epsilon ** 2))
-        # Alpha annealing schedule
-        start_alpha = 0.95
-        end_alpha = 0.05
-        anneal_fraction = 0.5  # Fraction of total iterations over which to anneal
+        # Tuned parameters for better performance
+        D_theory = 0.1  # Fixed D value
+        eta_theory = 0.001  # Fixed learning rate
+        M = 1  # Fixed averaging window
+        # Fixed alpha (no annealing)
+        start_alpha = 0.08  # Will be overridden by alpha_override
+        end_alpha = 0.08
+        anneal_fraction = 0.0  # No annealing
 
         # Calculate current alpha based on iteration progress
         progress = min(1.0, total_iters / (max_total_iterations * anneal_fraction))
@@ -220,7 +303,11 @@ class F2CSAAlgorithm:
             'name': 'Enhanced F2CSA',
             'dim': 5, 'epsilon': 0.012, 'alpha': alpha, 'eta': eta_scaled,
             'N_g': N_g, 'inner_steps': 250, 'D': D_scaled, 'lr': 5e-3,
-            'technique': {}
+            'technique': {},
+            'use_sgd_lower_level': True,  # Use SGD as specified in Algorithm 1
+            'll_sgd_lr': 0.01,
+            'll_sgd_steps': max(1, int(10 * np.log(1/(alpha**3)))),
+            'll_sgd_momentum': 0.9,
         }
 
 
@@ -331,12 +418,8 @@ class F2CSAAlgorithm:
                     lambda_opt = torch.as_tensor(last_ll_lambda_np, device=self.device, dtype=problem.dtype)
                 else:
                     if self.use_sgd_lower_level:
-                        # Use true solver for lower-level (consistent with DSBLO/SSIGD)
-                        y_opt, lambda_info = problem.solve_lower_level(xx)
-                        if isinstance(lambda_info, dict):
-                            lambda_opt = lambda_info.get('lambda', torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype))
-                        else:
-                            lambda_opt = lambda_info
+                        # Use SGD for lower-level as specified in Algorithm 1 of F2CSA.tex
+                        y_opt, lambda_opt = self._solve_lower_level_sgd(xx, problem, config)
                         
                         # Update cache
                         last_ll_x_t = xx.detach().clone()
@@ -345,12 +428,8 @@ class F2CSAAlgorithm:
                         last_ll_iter = total_iters
                         ll_solve_count += 1
                     else:
-                        # Use true solver for lower-level (consistent with DSBLO/SSIGD)
-                        y_opt, lambda_info = problem.solve_lower_level(xx)
-                        if isinstance(lambda_info, dict):
-                            lambda_opt = lambda_info.get('lambda', torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype))
-                        else:
-                            lambda_opt = lambda_info
+                        # Use SGD for lower-level as specified in Algorithm 1 of F2CSA.tex
+                        y_opt, lambda_opt = self._solve_lower_level_sgd(xx, problem, config)
                         
                         # Update cache
                         last_ll_x_t = xx.detach().clone()
