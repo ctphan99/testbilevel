@@ -106,9 +106,8 @@ class F2CSAAlgorithm:
         b_np = problem.b.detach().cpu().numpy()
         x_np = xx.detach().cpu().numpy()
         
-        # CVXPY setup following deterministic.py pattern
+        # CVXPY setup with fixed iteration count instead of eps_abs
         cvxpy_solver = cp.SCS
-        eps_abs = 1e-6  # Similar to deterministic.py
         warm_start = True
         
         # Solve lower-level problem using CVXPY
@@ -121,10 +120,10 @@ class F2CSAAlgorithm:
         # Constraints: A x + B y - b <= 0 (following deterministic.py format)
         constraints = [A_np @ x_np + B_np @ y_cvxpy - b_np <= 0]
         
-        # Solve the problem with proper solver parameters
+        # Solve the problem with fixed iteration count (N_g)
         prob = cp.Problem(cp.Minimize(ll_objective), constraints)
         try:
-            prob.solve(solver=cvxpy_solver, eps_abs=eps_abs, warm_start=warm_start, max_iters=max(1, int(N_g)))
+            prob.solve(solver=cvxpy_solver, warm_start=warm_start, max_iters=max(1, int(N_g)))
             if prob.status in ["optimal", "optimal_inaccurate"]:
                 y_opt_np = y_cvxpy.value
                 if y_opt_np is not None:
@@ -393,9 +392,8 @@ class F2CSAAlgorithm:
                         b_np = b.detach().cpu().numpy()
                         x_np = xx.detach().cpu().numpy()
                         
-                        # CVXPY setup following deterministic.py pattern
+                        # CVXPY setup with fixed iteration count instead of eps_abs
                         cvxpy_solver = cp.SCS
-                        eps_abs = 1e-6
                         warm_start = True
                         
                         # Solve lower-level problem using CVXPY
@@ -412,10 +410,10 @@ class F2CSAAlgorithm:
                         if last_ll_y_np is not None:
                             y_cvxpy.value = last_ll_y_np
                         
-                        # Solve the problem with proper solver parameters
+                        # Solve the problem with fixed iteration count (N_g)
                         prob = cp.Problem(cp.Minimize(ll_objective), constraints)
                         try:
-                            prob.solve(solver=cvxpy_solver, eps_abs=eps_abs, warm_start=warm_start, max_iters=max(1, int(N_g)))
+                            prob.solve(solver=cvxpy_solver, warm_start=warm_start, max_iters=max(1, int(N_g)))
                             if prob.status in ["optimal", "optimal_inaccurate"]:
                                 y_opt_np = y_cvxpy.value
                                 if y_opt_np is not None:
