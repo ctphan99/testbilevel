@@ -269,9 +269,9 @@ class F2CSAAlgorithm:
         D_theory = 0.1  # Fixed D value
         eta_theory = 0.001  # Fixed learning rate
         M = 1  # Fixed averaging window
-        # Fixed alpha (no annealing)
-        start_alpha = 0.08  # Will be overridden by alpha_override
-        end_alpha = 0.08
+        # Fixed alpha (no annealing) - optimized value
+        start_alpha = 0.5  # Will be overridden by alpha_override
+        end_alpha = 0.5
         anneal_fraction = 0.0  # No annealing
 
         # Calculate current alpha based on iteration progress
