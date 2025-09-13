@@ -52,8 +52,8 @@ class F2CSAAlgorithm:
         self.s_fixed_override = s_fixed_override
         self.Ng_override = 4 if Ng_override is None else int(Ng_override)
         self.grad_clip_override = 0.8 if grad_clip_override is None else float(grad_clip_override)
-        # Use CVXPY for lower-level solver with num_iter = N_g
-        self.use_sgd_lower_level: bool = True  # Keep for compatibility
+        # Use CVXPY for lower-level solver (exact solution)
+        self.use_sgd_lower_level: bool = False  # Use CVXPY, not SGD
         torch.manual_seed(seed)
         np.random.seed(seed)
         
@@ -120,10 +120,10 @@ class F2CSAAlgorithm:
         # Constraints: B y >= A x - b (correct bilevel constraint format)
         constraints = [B_np @ y_cvxpy >= A_np @ x_np - b_np]
         
-        # Solve the problem with fixed iteration count (N_g)
+        # Solve the problem exactly (no iteration limit)
         prob = cp.Problem(cp.Minimize(ll_objective), constraints)
         try:
-            prob.solve(solver=cvxpy_solver, warm_start=warm_start, max_iters=max(1, int(N_g)))
+            prob.solve(solver=cvxpy_solver, warm_start=warm_start)
             if prob.status in ["optimal", "optimal_inaccurate"]:
                 y_opt_np = y_cvxpy.value
                 if y_opt_np is not None:
@@ -410,10 +410,10 @@ class F2CSAAlgorithm:
                         if last_ll_y_np is not None:
                             y_cvxpy.value = last_ll_y_np
                         
-                        # Solve the problem with fixed iteration count (N_g)
+                        # Solve the problem exactly (no iteration limit)
                         prob = cp.Problem(cp.Minimize(ll_objective), constraints)
                         try:
-                            prob.solve(solver=cvxpy_solver, warm_start=warm_start, max_iters=max(1, int(N_g)))
+                            prob.solve(solver=cvxpy_solver, warm_start=warm_start)
                             if prob.status in ["optimal", "optimal_inaccurate"]:
                                 y_opt_np = y_cvxpy.value
                                 if y_opt_np is not None:
