@@ -8,7 +8,6 @@ Adds a standard .optimize(...) API to integrate with experiment runner.
 
 import torch
 import numpy as np
-import cvxpy as cp
 import time
 from typing import Dict, Tuple, Optional, List
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -52,8 +51,8 @@ class F2CSAAlgorithm:
         self.s_fixed_override = s_fixed_override
         self.Ng_override = 4 if Ng_override is None else int(Ng_override)
         self.grad_clip_override = 0.8 if grad_clip_override is None else float(grad_clip_override)
-        # Use CVXPY for lower-level solver (exact solution)
-        self.use_sgd_lower_level: bool = False  # Use CVXPY, not SGD
+        # Use true solver for lower-level (consistent with DSBLO/SSIGD)
+        self.use_sgd_lower_level: bool = False  # Use true solver, not SGD
         torch.manual_seed(seed)
         np.random.seed(seed)
         
@@ -90,62 +89,19 @@ class F2CSAAlgorithm:
     # ------------------------ validation helpers (Algorithm 1) ------------------------
     def oracle_sample(self, x: torch.Tensor, alpha: float, N_g: int) -> torch.Tensor:
         """
-        One stochastic oracle sample g~(x) using CVXPY for lower-level solver with proper setup.
-        Uses CVXPY with SCS solver, warm start, and proper dual variable extraction.
+        One stochastic oracle sample g~(x) using true solver for lower-level.
+        Uses the same solver as DSBLO/SSIGD for consistency.
         """
         problem = self.problem
         dim = problem.dim
         xx = x.detach().clone().requires_grad_(True)
         
-        # Convert torch tensors to numpy for CVXPY (following deterministic.py pattern)
-        Q_np = problem.Q_lower.detach().cpu().numpy()
-        c_np = problem.c_lower.detach().cpu().numpy()
-        P_np = problem.P.detach().cpu().numpy()
-        A_np = problem.A.detach().cpu().numpy()
-        B_np = problem.B.detach().cpu().numpy()
-        b_np = problem.b.detach().cpu().numpy()
-        x_np = xx.detach().cpu().numpy()
-        
-        # CVXPY setup with fixed iteration count instead of eps_abs
-        cvxpy_solver = cp.SCS
-        warm_start = True
-        
-        # Solve lower-level problem using CVXPY
-        y_cvxpy = cp.Variable(dim)
-        
-        # Lower-level objective: 0.5 * y^T Q y + (c + P^T x)^T y
-        q_cp = x_np.T @ P_np  # Following deterministic.py naming
-        ll_objective = 0.5 * cp.quad_form(y_cvxpy, Q_np) + q_cp @ y_cvxpy
-        
-        # Constraints: B y >= A x - b (correct bilevel constraint format)
-        constraints = [B_np @ y_cvxpy >= A_np @ x_np - b_np]
-        
-        # Solve the problem exactly (no iteration limit)
-        prob = cp.Problem(cp.Minimize(ll_objective), constraints)
-        try:
-            prob.solve(solver=cvxpy_solver, warm_start=warm_start)
-            if prob.status in ["optimal", "optimal_inaccurate"]:
-                y_opt_np = y_cvxpy.value
-                if y_opt_np is not None:
-                    y_opt = torch.tensor(y_opt_np, device=self.device, dtype=problem.dtype)
-                    # Extract dual variables (KKT multipliers)
-                    gamma_opt = constraints[0].dual_value
-                    if gamma_opt is not None:
-                        lambda_opt = torch.tensor(gamma_opt, device=self.device, dtype=problem.dtype)
-                    else:
-                        lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
-                else:
-                    # Fallback to zero if CVXPY fails
-                    y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
-                    lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
-            else:
-                # Fallback to zero if problem is infeasible/unbounded
-                y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
-                lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
-        except Exception:
-            # Fallback to zero if CVXPY fails
-            y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
-            lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
+        # Use true solver for lower-level (consistent with DSBLO/SSIGD)
+        y_opt, lambda_info = problem.solve_lower_level(xx)
+        if isinstance(lambda_info, dict):
+            lambda_opt = lambda_info.get('lambda', torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype))
+        else:
+            lambda_opt = lambda_info
         
         # Compute constraint violations
         h_val = problem.A @ xx - problem.B @ y_opt - problem.b
@@ -375,79 +331,13 @@ class F2CSAAlgorithm:
                     lambda_opt = torch.as_tensor(last_ll_lambda_np, device=self.device, dtype=problem.dtype)
                 else:
                     if self.use_sgd_lower_level:
-                        # CVXPY-based solve for: 0.5 y^T Q y + (c + P^T x)^T y with constraints
-                        Q = problem.Q_lower
-                        c = problem.c_lower
-                        P = problem.P
-                        A = problem.A
-                        B = problem.B
-                        b = problem.b
+                        # Use true solver for lower-level (consistent with DSBLO/SSIGD)
+                        y_opt, lambda_info = problem.solve_lower_level(xx)
+                        if isinstance(lambda_info, dict):
+                            lambda_opt = lambda_info.get('lambda', torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype))
+                        else:
+                            lambda_opt = lambda_info
                         
-                        # Convert torch tensors to numpy for CVXPY (following deterministic.py pattern)
-                        Q_np = Q.detach().cpu().numpy()
-                        c_np = c.detach().cpu().numpy()
-                        P_np = P.detach().cpu().numpy()
-                        A_np = A.detach().cpu().numpy()
-                        B_np = B.detach().cpu().numpy()
-                        b_np = b.detach().cpu().numpy()
-                        x_np = xx.detach().cpu().numpy()
-                        
-                        # CVXPY setup with fixed iteration count instead of eps_abs
-                        cvxpy_solver = cp.SCS
-                        warm_start = True
-                        
-                        # Solve lower-level problem using CVXPY
-                        y_cvxpy = cp.Variable(dim)
-                        
-                        # Lower-level objective: 0.5 * y^T Q y + (c + P^T x)^T y
-                        q_cp = x_np.T @ P_np  # Following deterministic.py naming
-                        ll_objective = 0.5 * cp.quad_form(y_cvxpy, Q_np) + q_cp @ y_cvxpy
-                        
-                        # Constraints: B y >= A x - b (correct bilevel constraint format)
-                        constraints = [B_np @ y_cvxpy >= A_np @ x_np - b_np]
-                        
-                        # Warm start with previous solution
-                        if last_ll_y_np is not None:
-                            y_cvxpy.value = last_ll_y_np
-                        
-                        # Solve the problem exactly (no iteration limit)
-                        prob = cp.Problem(cp.Minimize(ll_objective), constraints)
-                        try:
-                            prob.solve(solver=cvxpy_solver, warm_start=warm_start)
-                            if prob.status in ["optimal", "optimal_inaccurate"]:
-                                y_opt_np = y_cvxpy.value
-                                if y_opt_np is not None:
-                                    y_opt = torch.tensor(y_opt_np, device=self.device, dtype=problem.dtype)
-                                    # Extract dual variables (KKT multipliers)
-                                    gamma_opt = constraints[0].dual_value
-                                    if gamma_opt is not None:
-                                        lambda_opt = torch.tensor(gamma_opt, device=self.device, dtype=problem.dtype)
-                                    else:
-                                        lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
-                                else:
-                                    # Fallback to previous solution or zero
-                                    if last_ll_y_np is not None:
-                                        y_opt = torch.tensor(last_ll_y_np, device=self.device, dtype=problem.dtype)
-                                        lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
-                                    else:
-                                        y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
-                                        lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
-                            else:
-                                # Fallback to previous solution or zero
-                                if last_ll_y_np is not None:
-                                    y_opt = torch.tensor(last_ll_y_np, device=self.device, dtype=problem.dtype)
-                                    lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
-                                else:
-                                    y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
-                                    lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
-                        except Exception:
-                            # Fallback to previous solution or zero
-                            if last_ll_y_np is not None:
-                                y_opt = torch.tensor(last_ll_y_np, device=self.device, dtype=problem.dtype)
-                                lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
-                            else:
-                                y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
-                                lambda_opt = torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype)
                         # Update cache
                         last_ll_x_t = xx.detach().clone()
                         last_ll_y_np = y_opt.detach().cpu().numpy()
@@ -455,51 +345,19 @@ class F2CSAAlgorithm:
                         last_ll_iter = total_iters
                         ll_solve_count += 1
                     else:
-                        x_cp = xx.detach().cpu().numpy()
-                        y_cp = cp.Variable(dim)
-
-                        Q_lower_np = problem.Q_lower.detach().cpu().numpy()
-                        c_lower_np = problem.c_lower.detach().cpu().numpy()
-                        P_np = problem.P.detach().cpu().numpy()
-                        A_np = problem.A.detach().cpu().numpy()
-                        B_np = problem.B.detach().cpu().numpy()
-                        b_np = problem.b.detach().cpu().numpy()
-
-                        objective = cp.Minimize(0.5 * cp.quad_form(y_cp, Q_lower_np) +
-                                                (c_lower_np + P_np.T @ x_cp) @ y_cp)
-                        constraints = [B_np @ y_cp >= A_np @ x_cp - b_np]
-                        problem_cp = cp.Problem(objective, constraints)
-
-                        # Apply warm start from previous LL solution if available
-                        if last_ll_y_np is not None:
-                            try:
-                                y_cp.value = last_ll_y_np
-                            except Exception:
-                                pass
-
-                        problem_cp.solve(solver=cp.SCS, eps_abs=epsilon**2, warm_start=True)
-
-                        if problem_cp.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-                            if verbose:
-                                print(f"🛑 CVXPy solve failed: status={problem_cp.status}")
-                            total_iters += 1
-                            if ema_gap is not None:
-                                ema_gap_history.append(float(ema_gap))
-                            continue
-
-                        ll_solve_count += 1
-
+                        # Use true solver for lower-level (consistent with DSBLO/SSIGD)
+                        y_opt, lambda_info = problem.solve_lower_level(xx)
+                        if isinstance(lambda_info, dict):
+                            lambda_opt = lambda_info.get('lambda', torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype))
+                        else:
+                            lambda_opt = lambda_info
+                        
                         # Update cache
                         last_ll_x_t = xx.detach().clone()
-                        last_ll_y_np = y_cp.value
-                        try:
-                            last_ll_lambda_np = constraints[0].dual_value
-                        except Exception:
-                            last_ll_lambda_np = np.zeros(problem.b.shape[0])
+                        last_ll_y_np = y_opt.detach().cpu().numpy()
+                        last_ll_lambda_np = lambda_opt.detach().cpu().numpy()
                         last_ll_iter = total_iters
-
-                        y_opt = torch.as_tensor(y_cp.value, device=self.device, dtype=problem.dtype)
-                        lambda_opt = torch.tensor(constraints[0].dual_value, device=self.device, dtype=problem.dtype)
+                        ll_solve_count += 1
 
                 # Fixed alpha (annealing disabled)
                 alpha = self.alpha_override if self.alpha_override is not None else config.get('alpha', 0.95)
