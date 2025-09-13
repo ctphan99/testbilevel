@@ -275,8 +275,12 @@ class F2CSAAlgorithm:
         anneal_fraction = 0.0  # No annealing
 
         # Calculate current alpha based on iteration progress
-        progress = min(1.0, total_iters / (max_total_iterations * anneal_fraction))
-        alpha = start_alpha * (1 - progress) + end_alpha * progress
+        if anneal_fraction > 0:
+            progress = min(1.0, total_iters / (max_total_iterations * anneal_fraction))
+            alpha = start_alpha * (1 - progress) + end_alpha * progress
+        else:
+            # No annealing, use fixed alpha
+            alpha = start_alpha
 
         if self.alpha_override is not None:
             alpha = self.alpha_override
