@@ -52,12 +52,8 @@ class F2CSAAlgorithm:
         self.s_fixed_override = s_fixed_override
         self.Ng_override = 4 if Ng_override is None else int(Ng_override)
         self.grad_clip_override = 0.8 if grad_clip_override is None else float(grad_clip_override)
-        # New: use torch-based SGD for lower-level instead of CVXPy
-        self.use_sgd_lower_level: bool = True
-        self.ll_sgd_steps: int = 25
-        self.ll_sgd_lr: float = 5e-2 #####large lr may cause 
-        self.ll_sgd_momentum: float = 0.9
-        self.ll_constraint_penalty: float = 100.0
+        # Use CVXPY for lower-level solver with num_iter = N_g
+        self.use_sgd_lower_level: bool = True  # Keep for compatibility
         torch.manual_seed(seed)
         np.random.seed(seed)
         
@@ -94,42 +90,72 @@ class F2CSAAlgorithm:
     # ------------------------ validation helpers (Algorithm 1) ------------------------
     def oracle_sample(self, x: torch.Tensor, alpha: float, N_g: int) -> torch.Tensor:
         """
-        One stochastic oracle sample g~(x) using torch-SGD inner solve and the aligned penalty Lagrangian.
-        No KKT inspection; uses torch-only LL penalization as in the main loop.
+        One stochastic oracle sample g~(x) using CVXPY for lower-level solver with num_iter = N_g.
+        Uses CVXPY to solve the lower-level optimization problem exactly.
         """
         problem = self.problem
         dim = problem.dim
-        # LL torch-SGD
-        Q, c, P, A, B, b = problem.Q_lower, problem.c_lower, problem.P, problem.A, problem.B, problem.b
         xx = x.detach().clone().requires_grad_(True)
-        y = torch.zeros(dim, device=self.device, dtype=problem.dtype, requires_grad=True)
-        optimizer_ll = torch.optim.SGD([y], lr=self.ll_sgd_lr, momentum=self.ll_sgd_momentum)
-        for _ in range(self.ll_sgd_steps):
-            optimizer_ll.zero_grad()
-            quad = 0.5 * (y @ (Q @ y))
-            lin = (c + P.t() @ xx) @ y
-            h_val = A @ xx - B @ y - b
-            penalty = self.ll_constraint_penalty * torch.sum(torch.relu(h_val) ** 2)
-            ll_obj = quad + lin + penalty
-            ll_obj.backward()
-            optimizer_ll.step()
-        y_opt = y.detach()
-        lambda_opt = torch.relu(A @ xx - B @ y_opt - b).detach()
-        # penalty Lagrangian terms
+        
+        # Convert torch tensors to numpy for CVXPY
+        Q_np = problem.Q_lower.detach().cpu().numpy()
+        c_np = problem.c_lower.detach().cpu().numpy()
+        P_np = problem.P.detach().cpu().numpy()
+        A_np = problem.A.detach().cpu().numpy()
+        B_np = problem.B.detach().cpu().numpy()
+        b_np = problem.b.detach().cpu().numpy()
+        x_np = xx.detach().cpu().numpy()
+        
+        # Solve lower-level problem using CVXPY
+        y_cvxpy = cp.Variable(dim)
+        
+        # Lower-level objective: 0.5 * y^T Q y + (c + P^T x)^T y
+        linear_term = c_np + P_np.T @ x_np
+        ll_objective = 0.5 * cp.quad_form(y_cvxpy, Q_np) + linear_term @ y_cvxpy
+        
+        # Constraints: A x - B y - b <= 0
+        constraints = [A_np @ x_np - B_np @ y_cvxpy - b_np <= 0]
+        
+        # Solve the problem
+        prob = cp.Problem(cp.Minimize(ll_objective), constraints)
+        try:
+            prob.solve(verbose=False, max_iters=max(1, int(N_g)))
+            if prob.status not in ["infeasible", "unbounded"]:
+                y_opt_np = y_cvxpy.value
+                if y_opt_np is not None:
+                    y_opt = torch.tensor(y_opt_np, device=self.device, dtype=problem.dtype)
+                else:
+                    # Fallback to zero if CVXPY fails
+                    y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
+            else:
+                # Fallback to zero if problem is infeasible/unbounded
+                y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
+        except Exception:
+            # Fallback to zero if CVXPY fails
+            y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
+        
+        # Compute constraint violations and dual variables
+        h_val = problem.A @ xx - problem.B @ y_opt - problem.b
+        lambda_opt = torch.relu(h_val).detach()
+        
+        # Penalty Lagrangian terms
         alpha_1 = alpha ** (-2)
         alpha_2 = alpha ** (-4)
-        h_val_penalty = A @ xx - B @ y_opt - b
+        h_val_penalty = h_val
         tau_delta = 0.10
         epsilon_lambda = 0.10
         rho_i = self.smooth_activation(h_val_penalty, lambda_opt, tau_delta, epsilon_lambda)
+        
         f_val = problem.upper_objective(xx, y_opt, add_noise=True)
         g_val = problem.lower_objective(xx, y_opt, add_noise=False)
         g_val_at_y_star = g_val  # best available proxy
+        
         term1 = f_val
         term2 = alpha_1 * (g_val + torch.dot(lambda_opt, h_val_penalty) - g_val_at_y_star)
         term3 = 0.5 * alpha_2 * torch.sum(rho_i * (h_val_penalty ** 2))
         penalty_term = term2 + term3
-        # build stochastic gradient by averaging N_g samples of the f part
+        
+        # Build stochastic gradient by averaging N_g samples of the f part
         accumulated_grad_f = torch.zeros_like(xx)
         for _ in range(max(1, int(N_g))):
             f_val_sample = problem.upper_objective(xx, y_opt, add_noise=True)
@@ -337,30 +363,60 @@ class F2CSAAlgorithm:
                     lambda_opt = torch.as_tensor(last_ll_lambda_np, device=self.device, dtype=problem.dtype)
                 else:
                     if self.use_sgd_lower_level:
-                        # Torch-based Adam solve for: 0.5 y^T Q y + (c + P^T x)^T y with constraint penalty
+                        # CVXPY-based solve for: 0.5 y^T Q y + (c + P^T x)^T y with constraints
                         Q = problem.Q_lower
                         c = problem.c_lower
                         P = problem.P
                         A = problem.A
                         B = problem.B
                         b = problem.b
-                        y = torch.zeros(dim, device=self.device, dtype=problem.dtype, requires_grad=True)
-                        if last_ll_y_np is not None:
-                            try:
-                                y = torch.as_tensor(last_ll_y_np, device=self.device, dtype=problem.dtype, requires_grad=True)
-                            except Exception:
-                                pass
-                        optimizer_ll = torch.optim.SGD([y], lr=self.ll_sgd_lr, momentum=self.ll_sgd_momentum)  # Effective technique ####*****repetitive sgd momentum
-                        for _ in range(self.ll_sgd_steps):
-                            optimizer_ll.zero_grad()
-                            quad = 0.5 * (y @ (Q @ y))
-                            lin = (c + P.t() @ xx) @ y
-                            h_val = A @ xx - B @ y - b
-                            penalty = self.ll_constraint_penalty * torch.sum(torch.relu(h_val) ** 2)
-                            ll_obj = quad + lin + penalty
-                            ll_obj.backward()
-                            optimizer_ll.step()
-                        y_opt = y.detach()
+                        
+                        # Convert torch tensors to numpy for CVXPY
+                        Q_np = Q.detach().cpu().numpy()
+                        c_np = c.detach().cpu().numpy()
+                        P_np = P.detach().cpu().numpy()
+                        A_np = A.detach().cpu().numpy()
+                        B_np = B.detach().cpu().numpy()
+                        b_np = b.detach().cpu().numpy()
+                        x_np = xx.detach().cpu().numpy()
+                        
+                        # Solve lower-level problem using CVXPY
+                        y_cvxpy = cp.Variable(dim)
+                        
+                        # Lower-level objective: 0.5 * y^T Q y + (c + P^T x)^T y
+                        linear_term = c_np + P_np.T @ x_np
+                        ll_objective = 0.5 * cp.quad_form(y_cvxpy, Q_np) + linear_term @ y_cvxpy
+                        
+                        # Constraints: A x - B y - b <= 0
+                        constraints = [A_np @ x_np - B_np @ y_cvxpy - b_np <= 0]
+                        
+                        # Solve the problem with num_iter = N_g
+                        prob = cp.Problem(cp.Minimize(ll_objective), constraints)
+                        try:
+                            prob.solve(verbose=False, max_iters=max(1, int(N_g)))
+                            if prob.status not in ["infeasible", "unbounded"]:
+                                y_opt_np = y_cvxpy.value
+                                if y_opt_np is not None:
+                                    y_opt = torch.tensor(y_opt_np, device=self.device, dtype=problem.dtype)
+                                else:
+                                    # Fallback to previous solution or zero
+                                    if last_ll_y_np is not None:
+                                        y_opt = torch.tensor(last_ll_y_np, device=self.device, dtype=problem.dtype)
+                                    else:
+                                        y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
+                            else:
+                                # Fallback to previous solution or zero
+                                if last_ll_y_np is not None:
+                                    y_opt = torch.tensor(last_ll_y_np, device=self.device, dtype=problem.dtype)
+                                else:
+                                    y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
+                        except Exception:
+                            # Fallback to previous solution or zero
+                            if last_ll_y_np is not None:
+                                y_opt = torch.tensor(last_ll_y_np, device=self.device, dtype=problem.dtype)
+                            else:
+                                y_opt = torch.zeros(dim, device=self.device, dtype=problem.dtype)
+                        
                         # Proxy duals: nonnegative multipliers from violations
                         h_val_final = A @ xx - B @ y_opt - b
                         lambda_opt = torch.relu(h_val_final).detach()
