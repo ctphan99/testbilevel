@@ -117,8 +117,8 @@ class F2CSAAlgorithm:
         q_cp = x_np.T @ P_np  # Following deterministic.py naming
         ll_objective = 0.5 * cp.quad_form(y_cvxpy, Q_np) + q_cp @ y_cvxpy
         
-        # Constraints: A x + B y - b <= 0 (following deterministic.py format)
-        constraints = [A_np @ x_np + B_np @ y_cvxpy - b_np <= 0]
+        # Constraints: B y >= A x - b (correct bilevel constraint format)
+        constraints = [B_np @ y_cvxpy >= A_np @ x_np - b_np]
         
         # Solve the problem with fixed iteration count (N_g)
         prob = cp.Problem(cp.Minimize(ll_objective), constraints)
@@ -403,8 +403,8 @@ class F2CSAAlgorithm:
                         q_cp = x_np.T @ P_np  # Following deterministic.py naming
                         ll_objective = 0.5 * cp.quad_form(y_cvxpy, Q_np) + q_cp @ y_cvxpy
                         
-                        # Constraints: A x + B y - b <= 0 (following deterministic.py format)
-                        constraints = [A_np @ x_np + B_np @ y_cvxpy - b_np <= 0]
+                        # Constraints: B y >= A x - b (correct bilevel constraint format)
+                        constraints = [B_np @ y_cvxpy >= A_np @ x_np - b_np]
                         
                         # Warm start with previous solution
                         if last_ll_y_np is not None:
