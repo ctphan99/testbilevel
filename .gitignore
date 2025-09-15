@@ -1,0 +1,28 @@
+﻿# Virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Plots and large images
+*.png
+*.jpg
+*.jpeg
+
+# Results and logs
+*.json
+*.log
+
+# CVXPY solver caches
+cvxpy_*cache*
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
