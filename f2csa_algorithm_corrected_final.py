@@ -38,9 +38,9 @@ class F2CSAAlgorithm1Final:
         print(f"  Target: δ-accuracy < 0.1 (δ = α³)")
         print(f"  Device: {device}, dtype: {dtype}")
     
-    def _solve_lower_level_accurate(self, x: torch.Tensor, alpha: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+    def _solve_lower_level_accurate(self, x: torch.Tensor, alpha: float, prev_y: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """
-        Solve lower-level problem accurately using CVXPY
+        Solve lower-level problem accurately using CVXPY with optional warm start.
         Returns y_star, lambda_star, and solution info
         """
         try:
@@ -57,6 +57,13 @@ class F2CSAAlgorithm1Final:
             # Create variables
             y = cp.Variable(self.problem.dim)
             
+            # Warm-start y if provided
+            try:
+                if prev_y is not None:
+                    y.value = prev_y.detach().cpu().numpy()
+            except Exception:
+                pass
+            
             # Objective: min_y 0.5 * y^T Q_lower y + c_lower^T y
             objective = cp.Minimize(0.5 * cp.quad_form(y, Q_lower_np) + c_lower_np.T @ y)
             
@@ -65,7 +72,7 @@ class F2CSAAlgorithm1Final:
             
             # Solve
             problem_cvx = cp.Problem(objective, constraints)
-            problem_cvx.solve(verbose=False, solver=cp.OSQP)
+            problem_cvx.solve(verbose=False, solver=cp.OSQP, warm_start=True)
             
             if problem_cvx.status == cp.OPTIMAL:
                 y_star = torch.tensor(y.value, dtype=self.dtype, device=self.device)
@@ -211,48 +218,46 @@ class F2CSAAlgorithm1Final:
         return L_penalty
     
     def _minimize_penalty_lagrangian(self, x: torch.Tensor, y_star: torch.Tensor, 
-                                   lambda_star: torch.Tensor, alpha: float, delta: float) -> torch.Tensor:
+                                   lambda_star: torch.Tensor, alpha: float, delta: float,
+                                   init_y: Optional[torch.Tensor] = None,
+                                   keep_adam_state: bool = False) -> torch.Tensor:
         """
-        Minimize the penalty Lagrangian to find ỹ(x) using Adam optimizer
-        Following Algorithm 1 Step 4
+        Minimize the penalty Lagrangian to find ỹ(x) using Adam optimizer.
+        Supports optional warm start for y and optional Adam state carryover across calls.
         """
-        # Initialize y with some perturbation from y_star to ensure penalty minimization
-        # Add small random noise to break symmetry and force penalty minimization
-        noise = torch.randn_like(y_star) * 0.1
-        y = (y_star + noise).detach().requires_grad_(True)
+        # Initialize y
+        if keep_adam_state and hasattr(self, "_adam_y") and hasattr(self, "_adam_opt"):
+            y = self._adam_y
+            if init_y is not None and y.shape == init_y.shape:
+                with torch.no_grad():
+                    y.copy_(init_y)
+            y.requires_grad_(True)
+            optimizer = self._adam_opt
+        else:
+            base = init_y if init_y is not None else y_star
+            noise = torch.randn_like(base) * 0.05
+            y = (base + noise).detach().requires_grad_(True)
+            # Use Adam optimizer with adaptive learning rate based on penalty strength
+            alpha2 = 1.0 / (alpha**4)
+            adaptive_lr = min(0.01, 1.0 / (alpha2**0.5))
+            optimizer = optim.Adam([y], lr=adaptive_lr)
+            if keep_adam_state:
+                self._adam_y = y
+                self._adam_opt = optimizer
         
-        # Use Adam optimizer with adaptive learning rate based on penalty strength
-        # α₂ = α^-4 can be huge → keep lr tiny
-        alpha2 = 1.0 / (alpha**4)
-        adaptive_lr = min(0.01, 1.0 / (alpha2**0.5))  # Scale learning rate with penalty strength
-        optimizer = optim.Adam([y], lr=adaptive_lr)
-        
-        # Minimize penalty Lagrangian
         prev_y = y.clone()
-        for iteration in range(1000):  # Increased iterations for better convergence
+        for iteration in range(1000):
             optimizer.zero_grad()
-            
-            # Compute penalty Lagrangian
             L_val = self._compute_penalty_lagrangian(x, y, y_star, lambda_star, alpha, delta)
-            
-            # Backward pass
             L_val.backward()
-            
-            # Update y
             optimizer.step()
             
-            # Check convergence based on parameter change
             y_change = torch.norm(y - prev_y).item()
             grad_norm = torch.norm(y.grad).item()
-            
-            # More robust convergence criteria
-            if y_change < delta or grad_norm < delta * 100:  # Relaxed gradient criterion
+            if y_change < delta or grad_norm < delta * 100:
                 print(f"    Converged at iteration {iteration + 1} (y_change = {y_change:.8f}, grad_norm = {grad_norm:.8f})")
                 break
-            
             prev_y = y.clone()
-            
-            # Early stopping if making no progress
             if iteration > 100 and y_change < 1e-10:
                 print(f"    Early stopping at iteration {iteration + 1} (no progress)")
                 break
@@ -307,17 +312,21 @@ class F2CSAAlgorithm1Final:
         
         return y.detach()
     
-    def oracle_sample(self, x: torch.Tensor, alpha: float, N_g: int) -> torch.Tensor:
+    def oracle_sample(self, x: torch.Tensor, alpha: float, N_g: int,
+                      prev_y: Optional[torch.Tensor] = None,
+                      prev_lambda: Optional[torch.Tensor] = None,
+                      warm_ll: bool = False,
+                      keep_adam_state: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Implement Algorithm 1: Stochastic Penalty-Based Hypergradient Oracle
-        Following F2CSA_corrected.tex exactly with corrected penalty parameters
+        Implement Algorithm 1 with optional LL warm start and Adam carryover.
+        Returns (hypergradient, y_tilde, lambda_star)
         """
         delta = alpha ** 3  # δ = α³
         
         print(f"  Computing accurate lower-level solution with δ = {delta:.2e}")
         
-        # Step 3: Compute ỹ*(x) and λ̃(x) by accurate solver
-        y_star, lambda_star, info = self._solve_lower_level_accurate(x, alpha)
+        # Step 3: Compute ỹ*(x) and λ̃(x) by accurate solver with optional warm start
+        y_star, lambda_star, info = self._solve_lower_level_accurate(x, alpha, prev_y if warm_ll else None)
         
         print(f"  Lower-level solution: ỹ* = {y_star}")
         print(f"  Lower-level multipliers: λ̃ = {lambda_star}")
@@ -325,8 +334,10 @@ class F2CSAAlgorithm1Final:
         
         print(f"  Computing penalty minimizer ỹ(x) with δ = {delta:.2e}")
         
-        # Step 4: Compute ỹ(x) = argmin_y L_{λ̃,α}(x,y) s.t. ||ỹ(x) - y*_{λ̃,α}(x)|| ≤ δ
-        y_tilde = self._minimize_penalty_lagrangian(x, y_star, lambda_star, alpha, delta)
+        # Step 4: Compute ỹ(x) = argmin_y L_{λ̃,α}(x,y)
+        init_y = prev_y if warm_ll and prev_y is not None else y_star
+        y_tilde = self._minimize_penalty_lagrangian(x, y_star, lambda_star, alpha, delta,
+                                                    init_y=init_y, keep_adam_state=keep_adam_state)
         
         print(f"  Penalty minimizer: ỹ = {y_tilde}")
         
@@ -336,30 +347,20 @@ class F2CSAAlgorithm1Final:
         hypergradient_samples = []
         
         for j in range(N_g):
-            # Sample fresh noise for this gradient estimate
             noise_upper, _ = self.problem._sample_instance_noise()
-            
-            # Create computational graph for gradient computation
             x_grad = x.clone().detach().requires_grad_(True)
-            
-            # Compute penalty Lagrangian with noise
             L_val = self._compute_penalty_lagrangian(x_grad, y_tilde, y_star, lambda_star, alpha, delta)
-            
-            # Add upper-level objective with noise
             f_val = self.problem.upper_objective(x_grad, y_tilde, noise_upper=noise_upper)
             total_val = f_val + L_val
-            
-            # Compute gradient w.r.t. x
             grad_x = torch.autograd.grad(total_val, x_grad, create_graph=True, retain_graph=True)[0]
             hypergradient_samples.append(grad_x.detach())
         
-        # Average the samples
         hypergradient = torch.stack(hypergradient_samples).mean(dim=0)
         
         print(f"  Final hypergradient: ∇F̃ = {hypergradient}")
         print(f"  Hypergradient norm: ||∇F̃|| = {torch.norm(hypergradient).item():.6f}")
         
-        return hypergradient
+        return hypergradient, y_tilde.detach(), lambda_star.detach()
     
     def optimize(self, x0: torch.Tensor, max_iterations: int = 1000, 
                 alpha: float = 0.2, N_g: int = None, lr: float = 1e-3) -> Dict:

@@ -42,15 +42,15 @@ class F2CSAAlgorithm:
         self.seed = seed
         self.problem = problem
         # Set requested stable defaults when not provided via overrides
-        self.alpha_override = 0.01 if alpha_override is None else float(alpha_override)
+        self.alpha_override = 0.08 if alpha_override is None else float(alpha_override)
         # Stabilization buffers
         self.grad_ema: Optional[torch.Tensor] = None
         self.grad_ema_beta: float = 0.90 if grad_ema_beta_override is None else float(grad_ema_beta_override)
         self.prox_weight: float = 0.03 if prox_weight_override is None else float(prox_weight_override)
-        self.eta_override = 0.001 if eta_override is None else float(eta_override)
-        self.D_override = 0.01 if D_override is None else float(D_override)
+        self.eta_override = 8e-6 if eta_override is None else float(eta_override)
+        self.D_override = 1.25e-2 if D_override is None else float(D_override)
         self.s_fixed_override = s_fixed_override
-        self.Ng_override = 16 if Ng_override is None else int(Ng_override)
+        self.Ng_override = 4 if Ng_override is None else int(Ng_override)
         self.grad_clip_override = 0.8 if grad_clip_override is None else float(grad_clip_override)
         # Use true solver for lower-level (consistent with DSBLO/SSIGD)
         self.use_sgd_lower_level: bool = False  # Use true solver, not SGD
@@ -66,7 +66,7 @@ class F2CSAAlgorithm:
         """Create problem if not supplied by caller."""
         return StronglyConvexBilevelProblem(
             dim=dim, num_constraints=3, noise_std=0.0005,
-            device=self.device, seed=self.seed, strong_convex=strong_convex
+            device=self.device, strong_convex=strong_convex
         )
 
     def smooth_activation(self, h_val: torch.Tensor, lambda_val: torch.Tensor,
@@ -111,10 +111,14 @@ class F2CSAAlgorithm:
         dim = problem.dim
         xx = x.detach().clone().requires_grad_(True)
         
-        # Use Algorithm 2 with SGD for lower-level as specified in deterministic.py
-        y_opt, lambda_opt = self._solve_lower_level_algorithm2_sgd(xx, problem, alpha, config)
+        # Use accurate solver for lower-level solution as specified in Algorithm 1
+        y_opt, info = problem.solve_lower_level(xx, solver='accurate', alpha=alpha, max_iter=10000, tol=1e-8)
+        lambda_opt = info.get('lambda', torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype))
         
-        # Compute constraint violations
+        # Compute constraint violations (should be <= 0 for feasible)
+        # Ensure tensors are on same device and dtype
+        xx = xx.to(device=problem.device, dtype=problem.dtype)
+        y_opt = y_opt.to(device=problem.device, dtype=problem.dtype)
         h_val = problem.A @ xx - problem.B @ y_opt - problem.b
         
         # Penalty Lagrangian terms
@@ -125,10 +129,14 @@ class F2CSAAlgorithm:
         epsilon_lambda = 0.10
         rho_i = self.smooth_activation(h_val_penalty, lambda_opt, tau_delta, epsilon_lambda)
         
-        f_val = problem.upper_objective(xx, y_opt, add_noise=True)
-        g_val = problem.lower_objective(xx, y_opt, add_noise=False)
+        # Sample noise for upper and lower objectives
+        noise_upper, noise_lower = problem._sample_instance_noise()
+        
+        f_val = problem.upper_objective(xx, y_opt, noise_upper=noise_upper)
+        g_val = problem.lower_objective(xx, y_opt, noise_lower=noise_lower)
         g_val_at_y_star = g_val  # best available proxy
         
+        # Standard penalty Lagrangian terms as in F2CSA.tex
         term1 = f_val
         term2 = alpha_1 * (g_val + torch.dot(lambda_opt, h_val_penalty) - g_val_at_y_star)
         term3 = 0.5 * alpha_2 * torch.sum(rho_i * (h_val_penalty ** 2))
@@ -137,11 +145,13 @@ class F2CSAAlgorithm:
         # Build stochastic gradient by averaging N_g samples of the f part
         accumulated_grad_f = torch.zeros_like(xx)
         for _ in range(max(1, int(N_g))):
-            f_val_sample = problem.upper_objective(xx, y_opt, add_noise=True)
-            grad_f_sample = torch.autograd.grad(f_val_sample, xx, create_graph=False)[0]
+            # Sample noise for upper objective
+            noise_upper, _ = problem._sample_instance_noise()
+            f_val_sample = problem.upper_objective(xx, y_opt, noise_upper=noise_upper)
+            grad_f_sample = torch.autograd.grad(f_val_sample, xx, create_graph=True, retain_graph=True)[0]
             accumulated_grad_f += grad_f_sample
         grad_f = accumulated_grad_f / max(1, int(N_g))
-        grad_penalty = torch.autograd.grad(penalty_term, xx, create_graph=False)[0]
+        grad_penalty = torch.autograd.grad(penalty_term, xx, create_graph=True, retain_graph=True)[0]
         g_t = (grad_f + grad_penalty).detach()
         return g_t
 
@@ -217,10 +227,6 @@ class F2CSAAlgorithm:
             lambda_opt: Approximate dual variables
         """
         try:
-            # Handle None config
-            if config is None:
-                config = {}
-            
             # Parameters from deterministic.py
             eps_abs = alpha ** 2  # Line 153: eps_abs = eps ** 2
             warm_start = True
@@ -312,14 +318,8 @@ class F2CSAAlgorithm:
                 lagrangian_obj.backward()
                 y_optimizer.step()
                 
-                # Project to feasible region if needed
-                with torch.no_grad():
-                    h_val = problem.A @ x + problem.B @ y_lagrangian - problem.b
-                    violation = torch.relu(h_val)
-                    if torch.sum(violation) > 1e-6:
-                        # Simple projection step
-                        step_size = 0.01 / max(1.0, torch.sum(violation).item())
-                        y_lagrangian.data = y_lagrangian.data - step_size * problem.B.T @ violation
+                # Allow constraints to be violated naturally - no projection
+                # This enables the F2CSA penalty mechanism to work properly
             
             # Update y_lamb_opt for next iteration
             y_lamb_opt = y_lagrangian.detach()
@@ -380,20 +380,47 @@ class F2CSAAlgorithm:
                           run_until_convergence: bool = True) -> Dict:
         total_iters = 0
 
-        # Practical parameter tuning (no theoretical schedules)
-        # Using conservative parameters that achieve gap < 0.1
-        alpha = self.alpha_override if self.alpha_override is not None else 0.01
-        N_g = self.Ng_override if self.Ng_override is not None else 16
-        D_scaled = self.D_override if self.D_override is not None else 0.01
-        eta_scaled = self.eta_override if self.eta_override is not None else 0.001
-        M = 10  # Fixed averaging window
+        # F2CSA.tex theoretical parameters
+        epsilon = 0.01
+        delta = 0.1
+        L_F = 5.0
+
+        # Tuned parameters for better performance
+        D_theory = 0.1  # Fixed D value
+        eta_theory = 0.001  # Fixed learning rate
+        M = getattr(self, 'm_override', 1)  # Use override if available, otherwise default to 1
+        # Fixed alpha (no annealing) - optimized value
+        start_alpha = 0.5  # Will be overridden by alpha_override
+        end_alpha = 0.5
+        anneal_fraction = 0.0  # No annealing
+
+        # Calculate current alpha based on iteration progress
+        if anneal_fraction > 0:
+            progress = min(1.0, total_iters / (max_total_iterations * anneal_fraction))
+            alpha = start_alpha * (1 - progress) + end_alpha * progress
+        else:
+            # No annealing, use fixed alpha
+            alpha = start_alpha
+
+        if self.alpha_override is not None:
+            alpha = self.alpha_override
+        N_g = 1 if self.Ng_override is None else int(self.Ng_override)
+
+        # Practical scaling
+        scale_factor = 1e6
+        D_scaled = D_theory * scale_factor
+        eta_scaled = eta_theory * scale_factor
+        if self.D_override is not None:
+            D_scaled = float(self.D_override)
+        if self.eta_override is not None:
+            eta_scaled = float(self.eta_override)
 
         if verbose:
-            print(f"   Practical F2CSA Parameters:")
-            print(f"   D = {D_scaled:.3f} (clipping)")
-            print(f"   η = {eta_scaled:.3f} (step size)")
+            print(f"   F2CSA.tex Parameters (Theoretical Alignment):")
+            print(f"   D = {D_theory:.2e} -> {D_scaled:.2e} (scaled)")
+            print(f"   η = {eta_theory:.2e} -> {eta_scaled:.2e} (scaled)")
             print(f"   M = {M} (averaging window)")
-            print(f"   α = {alpha:.3f} (accuracy parameter)")
+            print(f"   α = {alpha:.2e} (accuracy parameter)")
             print(f"   N_g = {N_g} (batch size)")
 
         config = {
@@ -403,7 +430,7 @@ class F2CSAAlgorithm:
             'technique': {},
             'use_sgd_lower_level': True,  # Use SGD as specified in Algorithm 1
             'll_sgd_lr': 0.01,
-            'll_sgd_steps': 50,  # Fixed practical number of steps
+            'll_sgd_steps': max(1, int(10 * np.log(1/(alpha**3)))),
             'll_sgd_momentum': 0.9,
         }
 
@@ -442,7 +469,7 @@ class F2CSAAlgorithm:
         target_gap = 1e-3 if target_gap is None else target_gap
         
         # Convergence tracking
-        convergence_patience = early_stopping_patience if early_stopping_patience is not None else 1000
+        convergence_patience = 1000  # Number of iterations to wait for improvement
         best_ema_gap = float('inf')
         iterations_since_improvement = 0
         convergence_threshold = 1e-6  # Minimum improvement to consider as progress
@@ -514,26 +541,16 @@ class F2CSAAlgorithm:
                     y_opt = torch.as_tensor(last_ll_y_np, device=self.device, dtype=problem.dtype)
                     lambda_opt = torch.as_tensor(last_ll_lambda_np, device=self.device, dtype=problem.dtype)
                 else:
-                    if self.use_sgd_lower_level:
-                        # Use Algorithm 2 with SGD for lower-level as specified in deterministic.py
-                        y_opt, lambda_opt = self._solve_lower_level_algorithm2_sgd(xx, problem, alpha, config)
-                        
-                        # Update cache
-                        last_ll_x_t = xx.detach().clone()
-                        last_ll_y_np = y_opt.detach().cpu().numpy()
-                        last_ll_lambda_np = lambda_opt.detach().cpu().numpy()
-                        last_ll_iter = total_iters
-                        ll_solve_count += 1
-                    else:
-                        # Use Algorithm 2 with SGD for lower-level as specified in deterministic.py
-                        y_opt, lambda_opt = self._solve_lower_level_algorithm2_sgd(xx, problem, alpha, config)
-                        
-                        # Update cache
-                        last_ll_x_t = xx.detach().clone()
-                        last_ll_y_np = y_opt.detach().cpu().numpy()
-                        last_ll_lambda_np = lambda_opt.detach().cpu().numpy()
-                        last_ll_iter = total_iters
-                        ll_solve_count += 1
+                    # Use SGD solver for lower-level as specified in Algorithm 1
+                    y_opt, info = problem.solve_lower_level(xx, solver='pgd')
+                    lambda_opt = info.get('lambda', torch.zeros(problem.num_constraints, device=self.device, dtype=problem.dtype))
+                    
+                    # Update cache
+                    last_ll_x_t = xx.detach().clone()
+                    last_ll_y_np = y_opt.detach().cpu().numpy()
+                    last_ll_lambda_np = lambda_opt.detach().cpu().numpy()
+                    last_ll_iter = total_iters
+                    ll_solve_count += 1
 
                 # Fixed alpha (annealing disabled)
                 alpha = self.alpha_override if self.alpha_override is not None else config.get('alpha', 0.95)
@@ -546,28 +563,30 @@ class F2CSAAlgorithm:
 
                 # Constraint violation is now implicitly handled by the aligned penalty Lagrangian.
 
-                # --- F2CSA.tex Penalty Lagrangian (Equation 1) ---
+                # --- Aligned Penalty Lagrangian (F2CSA.tex) ---
                 # Extract dual variables (lambda) from the CVXPy solution
                 lambda_opt = lambda_opt  # already set by chosen LL path
 
-                # Define penalty parameters from F2CSA.tex
+                # Define penalty parameters from the paper
                 alpha_1 = alpha ** (-2)
                 alpha_2 = alpha ** (-4)
 
-                # Calculate h(x, y) for the penalty term
+                # Calculate h(x, y) for the penalty term (torch-native to preserve gradients w.r.t. xx)
                 h_val_penalty = problem.A @ xx - problem.B @ y_opt - problem.b
 
-                # Calculate smooth activation rho_i for each constraint
-                tau_delta = 0.01  # Practical smoothing parameter
-                epsilon_lambda = 0.01  # Practical smoothing parameter
+                # Calculate smooth activation rho_i for each constraint (easier activation)
+                tau_delta = 0.10  # Increased to trigger activation more often
+                epsilon_lambda = 0.10  # Increased to trigger activation more often
                 rho_i = self.smooth_activation(h_val_penalty, lambda_opt, tau_delta, epsilon_lambda)
 
-                # Compute the terms of the penalty Lagrangian (F2CSA.tex Equation 1)
-                f_val = self.problem.upper_objective(xx, y_opt, add_noise=False)  # No noise for penalty construction
-                g_val = self.problem.lower_objective(xx, y_opt, add_noise=False)
-                g_val_at_y_star = g_val  # y_opt is our best estimate of y*
+                # Compute the terms of the Lagrangian
+                # Sample noise for upper objective
+                noise_upper, _ = self.problem._sample_instance_noise()
+                f_val = self.problem.upper_objective(xx, y_opt, noise_upper=noise_upper)
+                g_val = self.problem.lower_objective(xx, y_opt) # Use noiseless for penalty
+                g_val_at_y_star = self.problem.lower_objective(xx, y_opt) # y_opt is our best estimate of y*
 
-                # Construct the penalty Lagrangian exactly as in F2CSA.tex
+                # Construct the full, aligned penalty Lagrangian
                 term1 = f_val
                 term2 = alpha_1 * (g_val + torch.dot(lambda_opt, h_val_penalty) - g_val_at_y_star)
                 term3 = 0.5 * alpha_2 * torch.sum(rho_i * (h_val_penalty**2))
@@ -579,25 +598,23 @@ class F2CSAAlgorithm:
                     except Exception:
                         pass
 
-                # F2CSA.tex Algorithm 1: Stochastic Hypergradient Oracle
-                # Calculate gradient of the full penalty Lagrangian
-                accumulated_grad = torch.zeros_like(xx)
+                # Refactored Gradient Calculation for Stability
+                # Calculate gradient of main objective separately
+                accumulated_grad_f = torch.zeros_like(xx)
                 for _ in range(N_g):
-                    # Create fresh computational graph for each sample
-                    xx_fresh = xx.detach().clone().requires_grad_(True)
-                    
-                    # Sample stochastic upper-level objective
-                    f_val_sample = self.problem.upper_objective(xx_fresh, y_opt, add_noise=True)
-                    
-                    # Calculate penalty Lagrangian with stochastic f
-                    penalty_lagrangian_sample = f_val_sample + term2 + term3
-                    
-                    # Compute gradient of the full penalty Lagrangian
-                    grad_sample = torch.autograd.grad(penalty_lagrangian_sample, xx_fresh, create_graph=False)[0]
-                    accumulated_grad += grad_sample
-                
-                # Average over N_g samples
-                gradient = accumulated_grad / N_g
+                    # Sample noise for upper objective
+                    noise_upper, _ = self.problem._sample_instance_noise()
+                    f_val_sample = self.problem.upper_objective(xx, y_opt, noise_upper=noise_upper)
+                    grad_f_sample = torch.autograd.grad(f_val_sample, xx, create_graph=True, retain_graph=True)[0]
+                    accumulated_grad_f += grad_f_sample
+                grad_f = accumulated_grad_f / N_g
+
+                # Calculate penalty gradient separately (more stable)
+                penalty_term = term2 + term3
+                grad_penalty = torch.autograd.grad(penalty_term, xx, create_graph=True, retain_graph=True)[0]
+
+                # Combine gradients
+                gradient = grad_f + grad_penalty
 
                 # Gradient EMA for stabilization - DISABLED FOR TESTING
                 # if self.grad_ema is None:
@@ -623,14 +640,14 @@ class F2CSAAlgorithm:
                     if gnorm > clip_norm:
                         stabilized_grad = stabilized_grad / gnorm * clip_norm
 
-                # F2CSA.tex Algorithm 2: Update with clipping
-                # Δ_{t+1} = clip(Δ_t - η ĝ_t), ||Δ|| ≤ D
-                delta = delta - eta * stabilized_grad
+                # Paper's Algorithm 2: momentum-like update with clipping + stabilizers
+                # Δ_{t+1} = clip(Δ_t - η (ĝ_t + prox)), ||Δ|| ≤ D
+                delta = delta - eta * (stabilized_grad + prox_term)
                 dnorm = torch.norm(delta)
                 if dnorm > D:
                     delta = delta / dnorm * D
 
-                # Update x: x_{t+1} = x_t + s * Δ_{t+1}
+                # Update x directly: x_{t+1} = x_t + s * Δ_{t+1}
                 x = (x + s * delta).detach().clone().requires_grad_(True)
 
                 # gap + EMA (with caching to reduce CVXPy calls)
@@ -704,8 +721,7 @@ class F2CSAAlgorithm:
                         break
                 
                 # target checks - use EMA gap for target achievement (only if not running until convergence)
-                # Only stop if we've achieved target AND run for at least 100 iterations
-                if not run_until_convergence and ema_gap is not None and ema_gap <= target_gap and total_iters >= 100:
+                if not run_until_convergence and ema_gap is not None and ema_gap <= target_gap:
                     break
             
             # stage end - check convergence or limits
@@ -795,6 +811,14 @@ class F2CSAAlgorithm:
             f.write(f"Final EMA Gap: {analysis.get('final_ema_gap', float('inf')):.6f}\n")
             f.write(f"Assessment: {analysis.get('assessment', 'N/A')}\n")
         print("\nResults saved to 'enhanced_f2csa_activation_momentum_results.txt'")
+        try:
+            # Reference the warm-LL + Adam plot generated by Algorithm 2 working run
+            with open('ALGO2_WARM_LL_REFERENCE.txt', 'w', encoding='utf-8') as fref:
+                fref.write('Plot file: algo2_warm_D0.05_eta1e-4_Ng64.png\n')
+                fref.write('Description: Warm-LL + Adam carryover 5k-iter comparison plot.\n')
+            print("Saved reference to 'ALGO2_WARM_LL_REFERENCE.txt'")
+        except Exception as e:
+            print(f"Failed to write reference: {e}")
         return analysis
 
     def analyze_enhanced_results(self, results: Dict) -> Dict:

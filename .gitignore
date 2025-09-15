@@ -17,6 +17,9 @@ Thumbs.db
 *.jpg
 *.jpeg
 
+# Keep selected algorithm plots
+!algo2_*.png
+
 # Results and logs
 *.json
 *.log

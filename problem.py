@@ -95,8 +95,8 @@ class StronglyConvexBilevelProblem:
         upper_eigenvals = torch.linalg.eigvals(self.Q_upper).real
         lower_eigenvals = torch.linalg.eigvals(self.Q_lower).real
 
-        print(f"Upper level strong convexity: λ_min={upper_eigenvals.min():.3f}, λ_max={upper_eigenvals.max():.3f}")
-        print(f"Lower level strong convexity: λ_min={lower_eigenvals.min():.3f}, λ_max={lower_eigenvals.max():.3f}")
+        print(f"Upper level strong convexity: lambda_min={upper_eigenvals.min():.3f}, lambda_max={upper_eigenvals.max():.3f}")
+        print(f"Lower level strong convexity: lambda_min={lower_eigenvals.min():.3f}, lambda_max={lower_eigenvals.max():.3f}")
 
     def _sample_instance_noise(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Sample independent instance noise for Q matrices"""

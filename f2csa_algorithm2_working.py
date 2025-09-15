@@ -41,7 +41,8 @@ class F2CSAAlgorithm2Working:
             return (D / v_norm) * v
     
     def optimize(self, x0: torch.Tensor, T: int, D: float, eta: float, 
-                 delta: float, alpha: float, N_g: int = None) -> Dict:
+                 delta: float, alpha: float, N_g: int = None,
+                 warm_ll: bool = False, keep_adam_state: bool = False) -> Dict:
         """
         Run F2CSA Algorithm 2 optimization with WORKING hypergradient computation
         """
@@ -49,11 +50,11 @@ class F2CSAAlgorithm2Working:
         print("=" * 70)
         print(f"T = {T}, D = {D:.6f}, η = {eta:.6f}")
         print(f"δ = {delta:.6f}, α = {alpha:.6f}")
+        print(f"warm_ll={warm_ll}, keep_adam_state={keep_adam_state}")
         print()
         
         # Set default N_g if not provided
         if N_g is None:
-            # Balanced N_g for working implementation
             N_g = max(10, min(100, int(1.0 / (alpha**1.5))))
         
         print(f"Using N_g = {N_g} samples for hypergradient estimation")
@@ -62,6 +63,10 @@ class F2CSAAlgorithm2Working:
         # Initialize
         x = x0.clone().detach()
         Delta = torch.zeros_like(x)
+        
+        # Persistent LL cache
+        prev_y = None
+        prev_lambda = None
         
         # Storage for results
         z_history = []
@@ -83,15 +88,20 @@ class F2CSAAlgorithm2Working:
         hg_tol = 1e-2
         
         for t in range(1, T + 1):
-            # Sample s_t ~ Unif[0, 1]
             s_t = torch.rand(1, device=self.device, dtype=self.dtype).item()
-            
-            # Update x_t and z_t
             x_t = x + Delta
             z_t = x + s_t * Delta
             
-            # Compute hypergradient using Algorithm 1 (WORKING version)
-            g_t = self.algorithm1.oracle_sample(z_t, alpha, N_g)
+            # Compute hypergradient with optional LL warm start
+            g_t, y_tilde, lambda_star = self.algorithm1.oracle_sample(
+                z_t, alpha, N_g,
+                prev_y=prev_y, prev_lambda=prev_lambda,
+                warm_ll=warm_ll, keep_adam_state=keep_adam_state
+            )
+
+            # Update LL cache for next iteration
+            prev_y = y_tilde.detach()
+            prev_lambda = lambda_star.detach()
 
             # Compute upper-level loss at x_t to monitor Algorithm 2 gap (f(x, y*))
             y_star, _ = self.problem.solve_lower_level(x_t)
@@ -126,7 +136,6 @@ class F2CSAAlgorithm2Working:
             # Update x for next iteration
             x = x_t
             
-            # Print progress
             if t % max(1, T // 20) == 0 or t <= 10:
                 g_norm = torch.norm(g_t).item()
                 Delta_norm = torch.norm(Delta).item()
@@ -135,14 +144,12 @@ class F2CSAAlgorithm2Working:
         print()
         print("Computing output points...")
         
-        # Group iterations for Goldstein subdifferential (per spec): K = max(1, total_iters // M)
         total_iters = len(z_history)
         M = max(1, int(delta / D))
         K = max(1, total_iters // M)
         
         print(f"M = {M}, K = {K}")
         
-        # Compute candidate points and their upper-level losses f(x, y*) for all K blocks
         candidates = []
         for k in range(1, K + 1):
             start_idx = (k - 1) * M
@@ -155,7 +162,6 @@ class F2CSAAlgorithm2Working:
                 candidates.append((x_k, ul_loss_k))
         
         if candidates:
-            # Choose the candidate with the smallest upper-level loss
             x_out, best_ul_loss = min(candidates, key=lambda t: t[1])
             print(f"Selected output with min f(x, y*) among {len(candidates)}: f = {best_ul_loss:.6f}")
         else:
@@ -164,10 +170,11 @@ class F2CSAAlgorithm2Working:
         print()
         
         # Compute final gradient norm
-        final_g = self.algorithm1.oracle_sample(x_out, alpha, N_g)
+        final_g, _, _ = self.algorithm1.oracle_sample(x_out, alpha, N_g,
+                                                      prev_y=prev_y, prev_lambda=prev_lambda,
+                                                      warm_ll=warm_ll, keep_adam_state=keep_adam_state)
         final_g_norm = torch.norm(final_g).item()
         
-        # Compute final upper-level loss f(x, y*) as Algorithm 2 gap
         y_star, _ = self.problem.solve_lower_level(x_out)
         final_ul_loss = self.problem.upper_objective(x_out, y_star).item()
         
@@ -176,7 +183,6 @@ class F2CSAAlgorithm2Working:
         print(f"Final point: {x_out}")
         print()
         
-        # Plot hypergradient norm and UL loss over iterations
         try:
             fig, ax1 = plt.subplots(figsize=(10, 6))
             ax1.plot(hypergrad_norms, color='tab:blue', label='||∇F̃||')
@@ -196,10 +202,10 @@ class F2CSAAlgorithm2Working:
         except Exception as e:
             print(f"Plotting failed: {e}")
         
-        # Save warm start for next runs
         try:
-            np.save('algo2_warmstart.npy', x_out.detach().cpu().numpy())
-            print("Saved warm start to algo2_warmstart.npy")
+            produced_warm = 'algo2_warmstart.npy'
+            np.save(produced_warm, x_out.detach().cpu().numpy())
+            print(f"Saved warm start to {produced_warm}")
         except Exception as e:
             print(f"Failed to save warm start: {e}")
         
@@ -220,52 +226,89 @@ class F2CSAAlgorithm2Working:
         }
 
 if __name__ == "__main__":
-    # Test the working Algorithm 2 implementation
+    import argparse, os
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--no-warm', action='store_true', help='Do not load warm start')
+    parser.add_argument('--T', type=int, default=10000)
+    parser.add_argument('--D', type=float, default=0.05)
+    parser.add_argument('--eta', type=float, default=0.0001)
+    parser.add_argument('--alpha', type=float, default=0.1)
+    parser.add_argument('--Ng', type=int, default=64)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--plot-name', type=str, default='algo2_hg_ul_loss.png')
+    parser.add_argument('--warm-path', type=str, default='algo2_warmstart.npy', help='Path to warm start .npy to load')
+    parser.add_argument('--save-warm-name', type=str, default='', help='If set, copy produced warm start to this path')
+    parser.add_argument('--warm-ll', action='store_true', help='Warm start lower-level (y, lambda) across iterations')
+    parser.add_argument('--keep-adam-state', action='store_true', help='Carry Adam state for penalty minimizer across steps')
+    args = parser.parse_args()
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
     problem = StronglyConvexBilevelProblem(
-        dim=5, 
-        num_constraints=3, 
-        noise_std=0.1, 
+        dim=5,
+        num_constraints=3,
+        noise_std=0.1,
         strong_convex=True
     )
-    
+
     algorithm2 = F2CSAAlgorithm2Working(problem)
-    
-    # Test parameters
-    alpha = 0.1
-    # Warm start if available
-    warm_path = 'algo2_warmstart.npy'
-    try:
-        import numpy as np
-        x0 = torch.tensor(np.load(warm_path), dtype=torch.float64)
-        print(f"Loaded warm start from {warm_path}: x0 shape = {tuple(x0.shape)}")
-    except Exception:
+
+    alpha = args.alpha
+    delta = alpha ** 3
+
+    # Warm start handling
+    if args.no_warm:
         x0 = torch.randn(5, dtype=torch.float64)
-        print("No warm start found; using random x0.")
-    T = 10000
-    D = 0.05
-    eta = 0.0001
-    delta = alpha**3
-    N_g = 64
-    
+        print("No-warm-start mode: using random x0.")
+    else:
+        warm_path = args.warm_path
+        try:
+            x0 = torch.tensor(np.load(warm_path), dtype=torch.float64)
+            print(f"Loaded warm start from {warm_path}: x0 shape = {tuple(x0.shape)}")
+        except Exception as e:
+            x0 = torch.randn(5, dtype=torch.float64)
+            print(f"Warm start not found at {warm_path}; using random x0. Error: {e}")
+
+    T = args.T
+    D = args.D
+    eta = args.eta
+    N_g = args.Ng
+
     print(f"Test point x0: {x0}")
     print(f"α = {alpha}")
     print(f"T = {T}, D = {D}, η = {eta}")
     print(f"δ = {delta:.6f}, N_g = {N_g}")
     print()
-    
-    # Test Algorithm 2 optimization
-    results = algorithm2.optimize(x0, T, D, eta, delta, alpha, N_g)
-    
-    # Check convergence
+
+    results = algorithm2.optimize(x0, T, D, eta, delta, alpha, N_g,
+                                  warm_ll=args.warm_ll,
+                                  keep_adam_state=args.keep_adam_state)
+
+    # Rename plot if requested
+    try:
+        default_plot = 'algo2_hg_ul_loss.png'
+        if args.plot_name != default_plot and os.path.exists(default_plot):
+            os.replace(default_plot, args.plot_name)
+            print(f"Renamed plot to {args.plot_name}")
+        # Optionally copy warm start under a new name
+        if args.save_warm_name and os.path.exists('algo2_warmstart.npy'):
+            try:
+                import shutil
+                shutil.copyfile('algo2_warmstart.npy', args.save_warm_name)
+                print(f"Copied warm start to {args.save_warm_name}")
+            except Exception as e:
+                print(f"Warm start copy failed: {e}")
+    except Exception as e:
+        print(f"Post-processing failed: {e}")
+
     hg_norms = results['hypergrad_norms']
     print(f"Gradient norms history (first 10): {[f'{g:.1f}' for g in hg_norms[:10]]}")
     print(f"Gradient norms history (last 10): {[f'{g:.1f}' for g in hg_norms[-10:]]}")
-    
-    # Check for stabilization
+
     if len(hg_norms) >= 10:
         last_10_norms = np.array(hg_norms[-10:])
         std_dev = np.std(last_10_norms)
-        mean_norm = np.mean(last_10_norms)
         print(f"Last 10 gradient norms std dev: {std_dev:.4f}")
         print(f"Last 10 gradient norms range: {np.max(last_10_norms) - np.min(last_10_norms):.4f}")
         if std_dev < 2.0 and (np.max(last_10_norms) - np.min(last_10_norms)) < 5.0:
