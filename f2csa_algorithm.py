@@ -9,7 +9,7 @@ import argparse
 import numpy as np
 import torch
 from problem import StronglyConvexBilevelProblem
-from f2csa_algorithm2_working import F2CSAAlgorithm2Working
+from f2csa_algorithm import F2CSAAlgorithm2Working
 
 
 def main():

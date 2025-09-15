@@ -76,6 +76,9 @@ class BilevelExperimentRunner:
             strong_convex=True
         )
         
+        # Use default problem setup without constraint enforcement
+        # This allows F2CSA penalty mechanism to work with natural constraint violations
+        
         # Initialize algorithms with algorithm-specific parameters only
         self.algorithms = {
             'F2CSA': F2CSAAlgorithm(
@@ -816,6 +819,12 @@ def main():
     with open('comprehensive_bilevel_report.txt', 'w', encoding='utf-8') as f:
         f.write(report)
     
+    print("\n[SUCCESS] Experiment completed successfully!")
+    print("[RESULTS] Check 'comprehensive_bilevel_results.json' for detailed results")
+    print("[REPORT] Check 'comprehensive_bilevel_report.txt' for summary report")
+
+if __name__ == "__main__":
+    main()
     print("\n[SUCCESS] Experiment completed successfully!")
     print("[RESULTS] Check 'comprehensive_bilevel_results.json' for detailed results")
     print("[REPORT] Check 'comprehensive_bilevel_report.txt' for summary report")
