@@ -111,8 +111,8 @@ class DSBLOOptII:
         x_history = []
         # cap sticky momentum
         beta = min(beta, 0.7)
-        # trust-region radius
-        delta = 1e-2
+        # trust-region radius (looser to avoid micro-steps)
+        delta = 5e-2
         consec_increase = 0
 
         # q1 ~ Q (LL perturbation)
@@ -127,16 +127,19 @@ class DSBLOOptII:
         # add stochastic noise (Option II)
         m = m + sigma * torch.randn_like(m)
 
+        # seed UL with initial instance noise for consistency
         y_star, _ = self.problem.solve_lower_level(x)
-        ul_losses.append(self.problem.upper_objective(x, y_star).item())
+        ul_losses.append(self.problem.upper_objective(x, y_star, noise_up).item())
         hypergrad_norms.append(torch.norm(m).item())
 
         best_ul = float('inf')
         since_best = 0
         for t in range(1, T + 1):
+            # momentum step with trust-region cap; keep baseline eta_cap (do not overwrite it)
             grad_norm = torch.norm(m)
-            eta = 1.0 / (gamma1 * grad_norm + gamma2)
-            eta = min(eta, eta_cap)
+            eta_raw_m = 1.0 / (gamma1 * max(grad_norm.item(), 1e-12) + gamma2)
+            eta_tr_m = delta / (grad_norm.item() + 1e-12)
+            eta = min(eta_raw_m, eta_cap, eta_tr_m)
 
             x_prev = x.clone()
             x = x - eta * m
@@ -144,31 +147,37 @@ class DSBLOOptII:
             # xbar ~ U[x_t, x_{t+1}] (second perturbation)
             xbar = torch.rand_like(x) * (x - x_prev) + x_prev
 
-            # gradient averaging with per-iteration CRN (reuse instance noise)
-            noise_up_s, noise_lo_s = self.problem._sample_instance_noise()
-            # compute yhat once for feasibility assessment
-            q_probe = torch.randn(self.problem.dim, dtype=self.dtype, device=self.device)
-            q_probe = 1e-6 * (q_probe / torch.norm(q_probe))
-            yhat_probe = self.solve_ll_perturbed(xbar, q_probe, noise_lo_s)
-            Aact_probe, Bact_probe = self.active(x, yhat_probe)
-            h_yhat_probe = self.problem.constraints(xbar, yhat_probe)
-            viol_yhat = torch.clamp(h_yhat_probe, min=0)
-            # adaptive k under constraint inactivity / large violation
-            if (Aact_probe is None) or (torch.norm(viol_yhat).item() > 5.0):
+            # per-iteration CRN pair for probes/diagnostics only
+            crn_up, crn_lo = self.problem._sample_instance_noise()
+            # compute CRN-based feasibility at x (stabilizes triggers)
+            q_crn = torch.randn(self.problem.dim, dtype=self.dtype, device=self.device)
+            q_crn = 1e-6 * (q_crn / torch.norm(q_crn))
+            yhat_crn = self.solve_ll_perturbed(x, q_crn, crn_lo)
+            Aact_crn, Bact_crn = self.active(x, yhat_crn)
+            viol_crn = torch.clamp(self.problem.constraints(x, yhat_crn), min=0)
+            # adaptive k under constraint inactivity / large violation (CRN-based)
+            if (Aact_crn is None) or (torch.norm(viol_crn).item() > 5.0):
                 grad_avg_k = min(32, max(grad_avg_k, 16))
+            else:
+                grad_avg_k = max(8, min(grad_avg_k, 32))
 
             # trust-region cap on eta for raw g direction
             # applied after g is computed below
 
-            # now build averaged gradient using CRN instance noise (vary q only)
+            # now build averaged gradient with k independent noise draws (no CRN reuse here)
             g_acc = torch.zeros_like(x)
             for _ in range(max(1, grad_avg_k)):
                 q = torch.randn(self.problem.dim, dtype=self.dtype, device=self.device)
                 q = 1e-6 * (q / torch.norm(q))
+                noise_up_s, noise_lo_s = self.problem._sample_instance_noise()
                 yhat = self.solve_ll_perturbed(xbar, q, noise_lo_s)
                 Aact, Bact = self.active(x, yhat)
                 # component-wise gradient to allow clipping of Jacobian term
                 gxf = self.gradx_f(xbar, yhat, noise_up_s)
+                # clip UL part as well to prevent oversized steps from UL alone
+                gxf_norm = torch.norm(gxf)
+                if gxf_norm > 100.0:
+                    gxf = gxf / gxf_norm * 100.0
                 jterm = self.grad_ystar(xbar, yhat, Aact, Bact, noise_lo_s).T @ self.grady_f(xbar, yhat, noise_lo_s)
                 # clip Jacobian contribution
                 jn = torch.norm(jterm)
@@ -180,17 +189,16 @@ class DSBLOOptII:
             g_norm = torch.norm(g)
             if g_norm > grad_clip:
                 g = g / g_norm * grad_clip
-            # feasibility-aware push when |A|=0
-            if (Aact_probe is None) and (torch.norm(viol_yhat).item() > 0):
-                lam = 1e-2 * min(1.0, torch.norm(viol_yhat).item() / 10.0)
+            # feasibility-aware push when |A|=0 (CRN-based)
+            if (Aact_crn is None) and (torch.norm(viol_crn).item() > 0):
+                lam = 1e-2 * min(1.0, torch.norm(viol_crn).item() / 10.0)
                 feas_push = torch.zeros_like(g)
                 for i in range(self.problem.num_constraints):
-                    if viol_yhat[i] > 0:
+                    if viol_crn[i] > 0:
                         feas_push += (-self.problem.B[i])
                 g = g + lam * feas_push
-            # trust-region eta cap for raw g
+            # trust-region eta for raw g (do not overwrite eta_cap)
             eta_tr = delta / (g_norm.item() + 1e-12)
-            eta_cap = min(eta_cap, max(1e-6, eta_tr))
             # add only minimal extra noise; instance noise already present
             g = g + sigma * torch.randn_like(g)
 
@@ -202,51 +210,53 @@ class DSBLOOptII:
             if m_norm > grad_clip:
                 m = m / m_norm * grad_clip
 
-            # stochastic Armijo backtracking on raw g using CRN
-            y_star_dbg, _ = self.problem.solve_lower_level(x)
-            F_x = self.problem.upper_objective(x, y_star_dbg).item()
+            # stochastic Armijo backtracking on raw g using CRN for probe
+            # Use CRN-evaluated LL solution for probes/diagnostics
+            F_x = self.problem.upper_objective(x, yhat_crn, crn_up).item()
             c1 = 1e-4
-            back_eta = min(1.0 / (gamma1 * max(g_norm.item(), 1e-12) + gamma2), eta_cap)
+            # backtracking step size includes trust-region clamp but keeps baseline eta_cap
+            back_eta = min(1.0 / (gamma1 * max(g_norm.item(), 1e-12) + gamma2), eta_cap, eta_tr)
             ok = False
-            for _ in range(5):
+            for _ in range(8):
                 x_try = x - back_eta * g
-                y_star_try, _ = self.problem.solve_lower_level(x_try)
-                F_try = self.problem.upper_objective(x_try, y_star_try).item()
+                # evaluate with CRN-consistent LL using the same q_crn and crn_lo
+                yhat_try_crn = self.solve_ll_perturbed(x_try, q_crn, crn_lo)
+                F_try = self.problem.upper_objective(x_try, yhat_try_crn, crn_up).item()
                 if F_try <= F_x - c1 * back_eta * (g_norm.item() ** 2):
                     ok = True
                     break
                 back_eta *= 0.5
             if not ok:
-                # reset momentum and shrink eta_cap
+                # reset momentum and shrink eta_cap slowly to allow recovery
                 m = g.clone()
-                eta_cap = max(1e-6, eta_cap * 0.7)
+                eta_cap = max(1e-6, eta_cap * 0.9)
                 consec_increase += 1
             else:
                 consec_increase = 0
 
             if verbose and (t % max(1, log_every) == 0):
-                # UL at current x with true y*
-                y_star_dbg, _ = self.problem.solve_lower_level(x)
-                F_x = self.problem.upper_objective(x, y_star_dbg).item()
+                # UL at current x with CRN noise for stable print
+                # current UL with CRN
+                F_x = self.problem.upper_objective(x, yhat_crn, crn_up).item()
                 # Descent probe using immediate grad (no momentum)
                 eta_raw_dbg = 1.0 / (gamma1 * max(g_norm.item(), 1e-12) + gamma2)
-                eta_dbg = min(eta_raw_dbg, eta_cap)
+                eta_dbg = min(eta_raw_dbg, eta_cap, eta_tr)
                 x_probe = x - eta_dbg * g
-                y_star_probe, _ = self.problem.solve_lower_level(x_probe)
-                F_probe = self.problem.upper_objective(x_probe, y_star_probe).item()
+                yhat_probe_crn = self.solve_ll_perturbed(x_probe, q_crn, crn_lo)
+                F_probe = self.problem.upper_objective(x_probe, yhat_probe_crn, crn_up).item()
 
-                # decomposition terms at (xbar, yhat)
-                gxf = self.gradx_f(xbar, yhat_probe, noise_up_s)
-                jy = self.grad_ystar(xbar, yhat_probe, Aact_probe, Bact_probe, noise_lo_s).T @ self.grady_f(xbar, yhat_probe, noise_lo_s)
-                # LL diagnostics
-                h_yhat = self.problem.constraints(xbar, yhat_probe)
+                # diagnostics at x with CRN
+                gxf = self.gradx_f(x, yhat_crn, crn_up)
+                jy = self.grad_ystar(x, yhat_crn, Aact_crn, Bact_crn, crn_lo).T @ self.grady_f(x, yhat_crn, crn_lo)
+                # LL diagnostics using CRN
+                h_yhat = self.problem.constraints(x, yhat_crn)
                 viol_yhat = torch.clamp(h_yhat, min=0)
-                H = self.hessyy_g(xbar, yhat, noise_lo_s)
+                H = self.hessyy_g(x, yhat_crn, crn_lo)
                 cond_val = float('nan')
                 min_sv = float('nan')
-                if Aact_probe is not None:
+                if Aact_crn is not None:
                     try:
-                        Minv = torch.linalg.inv(Aact_probe @ torch.linalg.inv(H) @ Aact_probe.T)
+                        Minv = torch.linalg.inv(Aact_crn @ torch.linalg.inv(H) @ Aact_crn.T)
                         s = torch.linalg.svdvals(Minv)
                         if s.numel() > 0:
                             min_sv = float(s.min().item())
@@ -257,7 +267,7 @@ class DSBLOOptII:
 
                 print(f"[t={t}] F(x)={F_x:.6f} F(x-eta*g)={F_probe:.6f} eta={eta_dbg:.3e} eta_cap={eta_cap:.3e}"
                       f" ||g||pre={g_norm:.6f} ||m||pre={torch.norm(m_before).item():.6f} ||m||post={m_norm:.6f}")
-                print(f"  |A|={(0 if Aact_probe is None else Aact_probe.size(0))} cond(AH^-1A^T)={cond_val} min_sv={min_sv}")
+                print(f"  |A|={(0 if Aact_crn is None else Aact_crn.size(0))} cond(AH^-1A^T)={cond_val} min_sv={min_sv}")
                 print(f"  ||gradx_f||={torch.norm(gxf).item():.6f} ||J^T grady_f||={torch.norm(jy).item():.6f}"
                       f" <gradx_f, J^T grady_f>={torch.dot(gxf.view(-1), jy.view(-1)).item():.6f}")
                 print(f"  yhat viol max={viol_yhat.max().item():.3e} ||viol||={torch.norm(viol_yhat).item():.3e}"
@@ -265,8 +275,8 @@ class DSBLOOptII:
                       f" sigma={sigma:.2e} k={grad_avg_k}")
 
             # tracking
-            y_star, _ = self.problem.solve_lower_level(x)
-            ul_losses.append(self.problem.upper_objective(x, y_star).item())
+            # tracking with CRN noise for stability
+            ul_losses.append(self.problem.upper_objective(x, yhat_crn, crn_up).item())
             hypergrad_norms.append(torch.norm(m).item())
             x_history.append(x.clone().detach())
 
@@ -320,6 +330,7 @@ def main():
     parser.add_argument('--dim', type=int, default=5)
     parser.add_argument('--constraints', type=int, default=3)
     parser.add_argument('--sigma', type=float, default=1e-2)
+    parser.add_argument('--problem-noise-std', type=float, default=None, help='Instance noise std for problem (overrides default)')
     parser.add_argument('--grad-clip', type=float, default=5.0)
     parser.add_argument('--eta-cap', type=float, default=1e-5)
     parser.add_argument('--noise-decay', type=float, default=0.995)
@@ -334,7 +345,10 @@ def main():
     parser.add_argument('--log-every', type=int, default=50)
     args = parser.parse_args()
 
-    problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints)
+    if args.problem_noise_std is not None:
+        problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints, noise_std=args.problem_noise_std)
+    else:
+        problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints)
     x0 = torch.randn(args.dim, dtype=torch.float64)
     algo = DSBLOOptII(problem)
     res = algo.optimize(
