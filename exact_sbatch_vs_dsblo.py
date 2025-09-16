@@ -37,16 +37,8 @@ def run_exact_sbatch_vs_dsblo():
     # removed external perturbation; rely on per-sample instance noise from problem
     parser.add_argument('--dsblo-opt', type=str, choices=['I', 'II'], default='II', help='DS-BLO option (I deterministic, II stochastic)')
     parser.add_argument('--dsblo-sigma', type=float, default=1e-2, help='Stochastic noise std for DS-BLO Option II')
-    # shared noise and DS-BLO param forwarding
-    parser.add_argument('--problem-noise-std', type=float, default=None,
-                        help='Instance noise std for the shared problem; default keeps current behavior')
-    parser.add_argument('--dsblo-gamma1', type=float, default=5.0)
-    parser.add_argument('--dsblo-gamma2', type=float, default=1.0)
-    parser.add_argument('--dsblo-beta', type=float, default=0.6)
-    parser.add_argument('--dsblo-k', type=int, default=16)
-    parser.add_argument('--dsblo-eta-cap', type=float, default=1e-3)
-    parser.add_argument('--dsblo-noise-decay', type=float, default=0.995)
-    parser.add_argument('--dsblo-noise-min', type=float, default=1e-4)
+    parser.add_argument('--problem-noise-std', type=float, default=None, help='Instance noise std for problem; default keeps current')
+    parser.add_argument('--seed', type=int, default=None, help='Random seed for shared x0')
     
     args = parser.parse_args()
     
@@ -59,12 +51,18 @@ def run_exact_sbatch_vs_dsblo():
     # no explicit perturbation std; stochasticity comes from instance noise
     print()
     
-    # Create shared problem instance (optional aligned noise)
+    # Seeding for reproducible shared x0 (optional)
+    if args.seed is not None:
+        import random
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+
+    # Create problem instance (optionally align noise std)
     if args.problem_noise_std is None:
         problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints)
     else:
-        problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints,
-                                               noise_std=args.problem_noise_std)
+        problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints, noise_std=args.problem_noise_std)
     
     # Initialize starting point
     x0 = torch.randn(args.dim, dtype=torch.float64)
@@ -106,20 +104,7 @@ def run_exact_sbatch_vs_dsblo():
     
     if args.dsblo_opt == 'II':
         dsblo = DSBLOOptII(problem)
-        dsblo_results = dsblo.optimize(
-            x0, args.T, args.alpha,
-            sigma=args.dsblo_sigma,
-            grad_clip=5.0,
-            eta_cap=args.dsblo_eta_cap,
-            noise_decay=args.dsblo_noise_decay,
-            noise_min=args.dsblo_noise_min,
-            grad_avg_k=args.dsblo_k,
-            gamma1=args.dsblo_gamma1,
-            gamma2=args.dsblo_gamma2,
-            beta=args.dsblo_beta,
-            adapt_eta=True,
-            verbose=False, log_every=50
-        )
+        dsblo_results = dsblo.optimize(x0, args.T, args.alpha, sigma=args.dsblo_sigma)
     else:
         dsblo = DSBLOConservative(problem)
         dsblo_results = dsblo.optimize(x0, args.T, args.alpha)

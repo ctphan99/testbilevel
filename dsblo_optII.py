@@ -108,6 +108,11 @@ class DSBLOOptII:
         x = x0.clone().detach()
         ul_losses = []
         hypergrad_norms = []
+        # debug metrics for numerical issues
+        grad_nan_count = 0
+        grad_inf_count = 0
+        m_nan_count = 0
+        m_inf_count = 0
         x_history = []
         # cap sticky momentum
         beta = min(beta, 0.7)
@@ -186,6 +191,17 @@ class DSBLOOptII:
                 g_sample = gxf + jterm
                 g_acc += g_sample
             g = g_acc / max(1, grad_avg_k)
+            # debug: check numerical issues
+            if torch.isnan(g).any():
+                grad_nan_count += 1
+                if verbose:
+                    print("[warn] g has NaN; zeroing this step")
+                g = torch.zeros_like(g)
+            if torch.isinf(g).any():
+                grad_inf_count += 1
+                if verbose:
+                    print("[warn] g has Inf; clipping to grad_clip")
+                g = torch.nan_to_num(g, nan=0.0, posinf=grad_clip, neginf=-grad_clip)
             g_norm = torch.norm(g)
             if g_norm > grad_clip:
                 g = g / g_norm * grad_clip
@@ -207,6 +223,18 @@ class DSBLOOptII:
             m = beta * m + (1.0 - beta) * g
             # clip momentum as well to stabilize
             m_norm = torch.norm(m)
+            if torch.isnan(m).any():
+                m_nan_count += 1
+                if verbose:
+                    print("[warn] m has NaN; resetting to g")
+                m = g.clone()
+                m_norm = torch.norm(m)
+            if torch.isinf(m).any():
+                m_inf_count += 1
+                if verbose:
+                    print("[warn] m has Inf; clipping to grad_clip")
+                m = torch.nan_to_num(m, nan=0.0, posinf=grad_clip, neginf=-grad_clip)
+                m_norm = torch.norm(m)
             if m_norm > grad_clip:
                 m = m / m_norm * grad_clip
 
@@ -320,6 +348,12 @@ class DSBLOOptII:
             'x_history': x_history,
             'iterations': T,
             'converged': torch.norm(m).item() < 1e-3,
+            'debug_metrics': {
+                'grad_nan_count': grad_nan_count,
+                'grad_inf_count': grad_inf_count,
+                'm_nan_count': m_nan_count,
+                'm_inf_count': m_inf_count,
+            }
         }
 
 
