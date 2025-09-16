@@ -50,8 +50,7 @@ class F2CSAAlgorithm2Working:
     def optimize(self, x0: torch.Tensor, T: int, D: float, eta: float, 
                  delta: float, alpha: float, N_g: int = None, 
                  warm_ll: bool = False, keep_adam_state: bool = False,
-                 plot_name: str = None, save_warm_name: str = None,
-                 perturbation_std: float = 0.01) -> Dict:
+                 plot_name: str = None, save_warm_name: str = None) -> Dict:
         """
         Run F2CSA Algorithm 2 optimization with WORKING hypergradient computation
         Now using perturbation + optimizer approach like main.py for proper warm start
@@ -60,7 +59,6 @@ class F2CSAAlgorithm2Working:
         print("=" * 70)
         print(f"T = {T}, D = {D:.6f}, η = {eta:.6f}")
         print(f"δ = {delta:.6f}, α = {alpha:.6f}")
-        print(f"Perturbation std: {perturbation_std:.6f}")
         print()
         
         # Set default N_g if not provided
@@ -87,9 +85,8 @@ class F2CSAAlgorithm2Working:
         
         # Main optimization loop - Using perturbation + optimizer approach like main.py
         for t in range(1, T + 1):
-            # Perturbation like main.py: s ~ Normal(0, perturbation_std)
-            s = torch.normal(torch.zeros_like(x), torch.ones_like(x)) * perturbation_std
-            xx = x + s  # This is z_t in the paper
+            # No external perturbation: use x directly; stochasticity from instance noise
+            xx = x
             
             # TWO-LEVEL WARM START SYSTEM (like main.py)
             
@@ -242,7 +239,6 @@ if __name__ == "__main__":
     parser.add_argument('--keep-adam-state', action='store_true', help='Keep Adam optimizer state')
     parser.add_argument('--plot-name', type=str, default=None, help='Plot filename')
     parser.add_argument('--save-warm-name', type=str, default=None, help='Warm start save filename')
-    parser.add_argument('--perturbation-std', type=float, default=0.01, help='Perturbation standard deviation')
     parser.add_argument('--dim', type=int, default=5, help='Problem dimension')
     parser.add_argument('--constraints', type=int, default=3, help='Number of constraints')
     
@@ -277,8 +273,7 @@ if __name__ == "__main__":
     results = algorithm2.optimize(
         x0, args.T, args.D, args.eta, delta, alpha, args.Ng,
         warm_ll=args.warm_ll, keep_adam_state=args.keep_adam_state,
-        plot_name=args.plot_name, save_warm_name=args.save_warm_name,
-        perturbation_std=args.perturbation_std
+        plot_name=args.plot_name, save_warm_name=args.save_warm_name
     )
     
     # Check convergence

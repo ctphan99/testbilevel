@@ -34,7 +34,7 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--plot-name', type=str, default='exact_sbatch_vs_dsblo.png', help='Plot filename')
     parser.add_argument('--dim', type=int, default=5, help='Problem dimension')
     parser.add_argument('--constraints', type=int, default=3, help='Number of constraints')
-    parser.add_argument('--perturbation-std', type=float, default=0.01, help='Perturbation standard deviation')
+    # removed external perturbation; rely on per-sample instance noise from problem
     parser.add_argument('--dsblo-opt', type=str, choices=['I', 'II'], default='II', help='DS-BLO option (I deterministic, II stochastic)')
     parser.add_argument('--dsblo-sigma', type=float, default=1e-2, help='Stochastic noise std for DS-BLO Option II')
     
@@ -46,7 +46,7 @@ def run_exact_sbatch_vs_dsblo():
     print(f"Problem: dim={args.dim}, constraints={args.constraints}")
     print(f"F2CSA Config: T={args.T}, D={args.D}, eta={args.eta}, Ng={args.Ng}, alpha={args.alpha}")
     print(f"Warm start: {args.warm_ll}, Adam state: {args.keep_adam_state}")
-    print(f"Perturbation std: {args.perturbation_std}")
+    # no explicit perturbation std; stochasticity comes from instance noise
     print()
     
     # Create problem instance
@@ -74,8 +74,7 @@ def run_exact_sbatch_vs_dsblo():
     f2csa_results = algorithm2.optimize(
         x0, args.T, args.D, args.eta, delta, args.alpha, args.Ng,
         warm_ll=args.warm_ll, keep_adam_state=args.keep_adam_state,
-        plot_name=None, save_warm_name=None,
-        perturbation_std=args.perturbation_std
+        plot_name=None, save_warm_name=None
     )
     
     print()
