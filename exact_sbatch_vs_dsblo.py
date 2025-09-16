@@ -13,7 +13,8 @@ from typing import Dict, Optional, Tuple
 from problem import StronglyConvexBilevelProblem
 from f2csa_algorithm_corrected_final import F2CSAAlgorithm1Final
 from f2csa_algorithm2_working import F2CSAAlgorithm2Working
-from dsblo_corrected_implementation import DSBLOCorrected
+from dsblo_conservative import DSBLOConservative
+from dsblo_optII import DSBLOOptII
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -34,6 +35,8 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--dim', type=int, default=5, help='Problem dimension')
     parser.add_argument('--constraints', type=int, default=3, help='Number of constraints')
     parser.add_argument('--perturbation-std', type=float, default=0.01, help='Perturbation standard deviation')
+    parser.add_argument('--dsblo-opt', type=str, choices=['I', 'II'], default='II', help='DS-BLO option (I deterministic, II stochastic)')
+    parser.add_argument('--dsblo-sigma', type=float, default=1e-2, help='Stochastic noise std for DS-BLO Option II')
     
     args = parser.parse_args()
     
@@ -88,13 +91,12 @@ def run_exact_sbatch_vs_dsblo():
     print("RUNNING DS-BLO (SAME PROBLEM)")
     print("=" * 50)
     
-    dsblo = DSBLOCorrected(problem)
-    
-    # DS-BLO parameters (using same alpha and upper-level objective)
-    # DS-BLO has its own internal step size calculation, so we only pass T and alpha
-    dsblo_results = dsblo.optimize(
-        x0, args.T, args.alpha
-    )
+    if args.dsblo_opt == 'II':
+        dsblo = DSBLOOptII(problem)
+        dsblo_results = dsblo.optimize(x0, args.T, args.alpha, sigma=args.dsblo_sigma)
+    else:
+        dsblo = DSBLOConservative(problem)
+        dsblo_results = dsblo.optimize(x0, args.T, args.alpha)
     
     print()
     print("DS-BLO Results:")
