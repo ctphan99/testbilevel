@@ -241,16 +241,25 @@ if __name__ == "__main__":
     parser.add_argument('--save-warm-name', type=str, default=None, help='Warm start save filename')
     parser.add_argument('--dim', type=int, default=5, help='Problem dimension')
     parser.add_argument('--constraints', type=int, default=3, help='Number of constraints')
+    parser.add_argument('--problem-noise-std', type=float, default=None, help='Instance noise std for the problem; default keeps current 0.1')
     
     args = parser.parse_args()
     
-    # Initialize problem
-    problem = StronglyConvexBilevelProblem(
-        dim=args.dim, 
-        num_constraints=args.constraints, 
-        noise_std=0.1, 
-        strong_convex=True
-    )
+    # Initialize problem (preserve current behavior unless flag is provided)
+    if args.problem_noise_std is None:
+        problem = StronglyConvexBilevelProblem(
+            dim=args.dim,
+            num_constraints=args.constraints,
+            noise_std=0.1,
+            strong_convex=True
+        )
+    else:
+        problem = StronglyConvexBilevelProblem(
+            dim=args.dim,
+            num_constraints=args.constraints,
+            noise_std=args.problem_noise_std,
+            strong_convex=True
+        )
     
     algorithm2 = F2CSAAlgorithm2Working(problem)
     
