@@ -120,6 +120,7 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--use-crn-ul', action='store_true', help='Plot UL with a single fixed CRN noise for both methods')
     parser.add_argument('--ul-scale', type=str, choices=['linear','symlog'], default='linear', help='Y-scale for UL plots')
     parser.add_argument('--ul-overlay-noisy', action='store_true', help='Overlay MC mean±std with fresh noise per iter')
+    parser.add_argument('--ul-overlay-noisy-raw', action='store_true', help='Overlay single-sample raw noisy UL per iter for both methods')
     parser.add_argument('--problem-noise-std', type=float, default=None, help='Instance noise std for problem; default keeps current')
     parser.add_argument('--seed', type=int, default=None, help='Random seed for shared x0')
     parser.add_argument('--legacy-dsblo', action='store_true', help='Run DsBlo (algorithms.py) on a fixed noisy instance')
@@ -273,6 +274,18 @@ def run_exact_sbatch_vs_dsblo():
             return np.array(means), np.array(stds)
         m_f2, s_f2 = mc_ul(f2csa_results['x_history'])
         m_ds, s_ds = mc_ul(dsblo_results['x_history'])
+
+    # Optional raw noisy overlay: single fresh noise sample per iter (trajectory-like)
+    if args.ul_overlay_noisy_raw:
+        def raw_ul(x_hist):
+            raw_vals = []
+            for x_t in x_hist:
+                n_up, _ = problem._sample_instance_noise()
+                y_star_t, _ = problem.solve_lower_level(x_t)
+                raw_vals.append(problem.upper_objective(x_t, y_star_t, n_up).item())
+            return np.array(raw_vals)
+        raw_f2 = raw_ul(f2csa_results['x_history']) if f2csa_results is not None else None
+        raw_ds = raw_ul(dsblo_results['x_history'])
     
     # Plot 1: Upper-level loss comparison
     if ul_f2csa is not None:
@@ -294,6 +307,10 @@ def run_exact_sbatch_vs_dsblo():
         ax1.fill_between(it_f2, m_f2 - s_f2, m_f2 + s_f2, color='C0', alpha=0.15)
         ax1.plot(it_ds, m_ds, color='C1', alpha=0.6, linestyle='--', label='DS-BLO (noisy mean)')
         ax1.fill_between(it_ds, m_ds - s_ds, m_ds + s_ds, color='C1', alpha=0.15)
+    if args.ul_overlay_noisy_raw:
+        if f2csa_results is not None and raw_f2 is not None:
+            ax1.plot(np.arange(len(raw_f2)), raw_f2, color='C0', alpha=0.45, linewidth=1, label='F2CSA (raw noisy)')
+        ax1.plot(np.arange(len(raw_ds)), raw_ds, color='C1', alpha=0.45, linewidth=1, label='DS-BLO (raw noisy)')
     
     # Plot 2: Gradient norm comparison
     if f2csa_results is not None:

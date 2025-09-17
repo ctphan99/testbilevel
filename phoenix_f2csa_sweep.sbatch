@@ -27,13 +27,13 @@ else
     export PYTHONPATH=/storage/scratch1/6/cphan36/python_packages/lib/python3.10/site-packages:$PYTHONPATH
 fi
 
-# Workdir: cd to the directory of this sbatch file (which should be testbilevel)
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-cd "$SCRIPT_DIR"
+# Workdir: cd to the submission directory (where you ran sbatch)
+WORK_DIR=${SLURM_SUBMIT_DIR:-$(pwd)}
+cd "$WORK_DIR"
 
 # Ensure Python can find site packages and sibling legacy repo
 export PYTHONPATH=/storage/scratch1/6/cphan36/python_packages/lib/python3.10/site-packages:$PYTHONPATH
-export PYTHONPATH=$(cd "$SCRIPT_DIR/.." && pwd)/BilevelLinearConstraints:$PYTHONPATH
+export PYTHONPATH=$(cd "$WORK_DIR/.." && pwd)/BilevelLinearConstraints:$PYTHONPATH
 
 # Parameter grids
 ALPHA_LIST=(0.05 0.10 0.15 0.20 0.25 0.30 0.40 0.50 0.60)
@@ -73,8 +73,27 @@ NOISE_STD=2e-3
 
 # Echo task config
 echo "Array task $SLURM_ARRAY_TASK_ID of $((TOTAL-1)): alpha=$TASK_ALPHA, D=$D, eta=$ETA, Ng=$NG, seed=$SEED"
-echo "SCRIPT_DIR=$SCRIPT_DIR"
+echo "WORK_DIR=$WORK_DIR"
 echo "PYTHONPATH=$PYTHONPATH"
+
+# Preflight: verify legacy algorithms.py is importable
+python - <<'PY'
+import sys, importlib.util, traceback
+print('Preflight: checking import of algorithms.DsBlo...')
+spec = importlib.util.find_spec('algorithms')
+print('find_spec algorithms ->', bool(spec), 'from', getattr(spec, 'origin', None))
+try:
+    from algorithms import DsBlo  # noqa: F401
+    print('Preflight OK: legacy DsBlo importable')
+except Exception:
+    print('Preflight FAILED: could not import algorithms.DsBlo')
+    traceback.print_exc()
+    sys.exit(2)
+PY
+if [[ $? -ne 0 ]]; then
+  echo "Aborting task $SLURM_ARRAY_TASK_ID due to missing legacy algorithms.py"
+  exit 2
+fi
 
 # Run combined comparison: F2CSA + DS-BLO (normal) + DS-BLO (Legacy)
 # Add warm-ll/keep-adam-state and use-crn-ul for smoothing and fair visual comparison
