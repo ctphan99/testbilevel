@@ -17,6 +17,81 @@ from dsblo_conservative import DSBLOConservative
 from dsblo_optII import DSBLOOptII
 import warnings
 
+# Legacy DsBlo adapter imports
+import sys, os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'BilevelLinearConstraints'))
+import numpy as np
+try:
+    from algorithms import DsBlo as LegacyDsBlo
+except Exception:
+    LegacyDsBlo = None
+
+# Try additional known locations for algorithms.py if not found
+if LegacyDsBlo is None:
+    candidate_paths = [
+        os.path.join(os.path.dirname(__file__), '..', 'BilevelLinearConstraints'),
+        r'C:\Users\phant\OneDrive\Documents\BilevelLinearConstraints\BilevelLinearConstraints'
+    ]
+    for p in candidate_paths:
+        if p not in sys.path and os.path.isdir(p):
+            sys.path.append(p)
+            try:
+                from algorithms import DsBlo as LegacyDsBlo  # type: ignore
+                break
+            except Exception:
+                LegacyDsBlo = None
+                continue
+
+class LegacyNoisyProblemAdapter:
+    def __init__(self, prob):
+        self.prob_t = prob
+        self.noise_up, self.noise_lo = prob._sample_instance_noise()
+        self.Qup = (prob.Q_upper + self.noise_up).cpu().numpy()
+        self.Qlo = (prob.Q_lower + self.noise_lo).cpu().numpy()
+        self.cu  = prob.c_upper.cpu().numpy().reshape(-1,1)
+        self.cl  = prob.c_lower.cpu().numpy().reshape(-1,1)
+        self.P   = prob.P.cpu().numpy()
+        self.A   = prob.A.cpu().numpy()
+        self.B   = prob.B.cpu().numpy()
+        self.b   = prob.b.cpu().numpy().reshape(-1,1)
+        self.y_dim = self.Qlo.shape[0]
+
+    # UL: f(x,y) = 0.5 x^T (Qup) x + c^T x + 0.5 y^T P y + x^T P y
+    def f(self, x, y):
+        return float(0.5*x.T@self.Qup@x + self.cu.T@x + 0.5*y.T@self.P@y + x.T@self.P@y)
+
+    # LL: g(x,y) = 0.5 y^T (Qlo) y + c^T y
+    def g(self, x, y):
+        return float(0.5*y.T@self.Qlo@y + self.cl.T@y)
+
+    def grady_g(self, x, y):
+        return self.Qlo@y + self.cl
+
+    # ∇_x f = Qup x + c + P y
+    def gradx_f(self, x, y):
+        return self.Qup@x + self.cu + self.P@y
+
+    # ∇_y f = P y + P^T x
+    def grady_f(self, x, y):
+        return self.P@y + self.P.T@x
+
+    def hessyy_g(self, x, y):
+        return self.Qlo
+
+    def hessxy_g(self, x, y):
+        return np.zeros_like(self.Qlo)
+
+    # projection used for init only; DsBlo replaces with solve_ll(x)
+    def projy(self, y0):
+        return y0
+
+    def solve_ll(self, x):
+        import torch
+        xt = torch.from_numpy(x.squeeze()).to(self.prob_t.dtype)
+        y_star_t, _ = self.prob_t.solve_lower_level(xt)
+        y = y_star_t.cpu().numpy().reshape(-1,1)
+        return y
+
 warnings.filterwarnings('ignore')
 
 def run_exact_sbatch_vs_dsblo():
@@ -47,6 +122,9 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--ul-overlay-noisy', action='store_true', help='Overlay MC mean±std with fresh noise per iter')
     parser.add_argument('--problem-noise-std', type=float, default=None, help='Instance noise std for problem; default keeps current')
     parser.add_argument('--seed', type=int, default=None, help='Random seed for shared x0')
+    parser.add_argument('--legacy-dsblo', action='store_true', help='Run DsBlo (algorithms.py) on a fixed noisy instance')
+    parser.add_argument('--only-dsblo', action='store_true', help='Run only DS-BLO and plot its results')
+    parser.add_argument('--ul-track-noisy-ll', action='store_true', help='Track UL using LL solved with noisy Q_lower each iter (DS-BLO)')
     
     args = parser.parse_args()
     
@@ -83,33 +161,56 @@ def run_exact_sbatch_vs_dsblo():
     print(f"Initial UL loss: {initial_ul_loss:.6f}")
     print()
     
-    # Run F2CSA Algorithm 2 with exact SBATCH configuration
-    print("=" * 50)
-    print("RUNNING F2CSA ALGORITHM 2 (SBATCH CONFIG)")
-    print("=" * 50)
-    
-    algorithm2 = F2CSAAlgorithm2Working(problem)
-    delta = 0.216  # Default delta value
-    
-    f2csa_results = algorithm2.optimize(
-        x0, args.T, args.D, args.eta, delta, args.alpha, args.Ng,
-        warm_ll=args.warm_ll, keep_adam_state=args.keep_adam_state,
-        plot_name=None, save_warm_name=None
-    )
-    
-    print()
-    print("F2CSA Results:")
-    print(f"  Final UL loss: {f2csa_results['final_ul_loss']:.6f}")
-    print(f"  Final gradient norm: {f2csa_results['final_gradient_norm']:.6f}")
-    print(f"  Converged: {f2csa_results['converged']}")
-    print(f"  Iterations: {f2csa_results['iterations']}")
-    print()
+    f2csa_results = None
+    if not args.only_dsblo:
+        # Run F2CSA Algorithm 2 with exact SBATCH configuration
+        print("=" * 50)
+        print("RUNNING F2CSA ALGORITHM 2 (SBATCH CONFIG)")
+        print("=" * 50)
+        
+        algorithm2 = F2CSAAlgorithm2Working(problem)
+        delta = 0.216  # Default delta value
+        
+        f2csa_results = algorithm2.optimize(
+            x0, args.T, args.D, args.eta, delta, args.alpha, args.Ng,
+            warm_ll=args.warm_ll, keep_adam_state=args.keep_adam_state,
+            plot_name=None, save_warm_name=None
+        )
+        
+        print()
+        print("F2CSA Results:")
+        print(f"  Final UL loss: {f2csa_results['final_ul_loss']:.6f}")
+        print(f"  Final gradient norm: {f2csa_results['final_gradient_norm']:.6f}")
+        print(f"  Converged: {f2csa_results['converged']}")
+        print(f"  Iterations: {f2csa_results['iterations']}")
+        print()
     
     # Run DS-BLO with same problem and parameters
     print("=" * 50)
     print("RUNNING DS-BLO (SAME PROBLEM)")
     print("=" * 50)
     
+    dsblo_legacy_results = None
+    if args.legacy_dsblo:
+        if LegacyDsBlo is None:
+            raise RuntimeError('Legacy DsBlo not available: algorithms.py not found')
+        x0_np = x0.cpu().numpy().reshape(-1,1)
+        y0_np = np.zeros((args.dim,1))
+        legacy = LegacyNoisyProblemAdapter(problem)
+        dsblo_legacy = LegacyDsBlo(legacy, out_iter=args.T, gamma1=args.dsblo_gamma1, gamma2=args.dsblo_gamma2, beta=args.dsblo_beta)
+        dsblo_legacy.run(x0_np, y0_np)
+        ul_losses = dsblo_legacy.loss
+        hypergrad_norms = dsblo_legacy.gradF
+        x_hist = [torch.from_numpy(xx.squeeze()).to(torch.float64) for xx in dsblo_legacy.x_iter]
+        dsblo_legacy_results = {
+            'final_ul_loss': ul_losses[-1],
+            'final_gradient_norm': hypergrad_norms[-1],
+            'converged': False,
+            'iterations': args.T,
+            'ul_losses': ul_losses,
+            'hypergrad_norms': hypergrad_norms,
+            'x_history': x_hist,
+        }
     if args.dsblo_opt == 'II':
         dsblo = DSBLOOptII(problem)
         dsblo_results = dsblo.optimize(
@@ -120,6 +221,7 @@ def run_exact_sbatch_vs_dsblo():
             gamma2=args.dsblo_gamma2,
             beta=args.dsblo_beta,
             eta_cap=args.dsblo_eta_cap,
+            ul_track_noisy_ll=args.ul_track_noisy_ll,
         )
     else:
         dsblo = DSBLOConservative(problem)
@@ -139,20 +241,21 @@ def run_exact_sbatch_vs_dsblo():
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
 
     # Optionally recompute UL with a single fixed CRN noise for both methods
-    ul_f2csa = f2csa_results['ul_losses']
+    ul_f2csa = f2csa_results['ul_losses'] if f2csa_results is not None else None
     ul_dsblo = dsblo_results['ul_losses']
     if args.use_crn_ul:
         crn_up, _ = problem._sample_instance_noise()
         # recompute along x histories with fixed noise
-        ul_f2csa_crn = []
-        for x_t in f2csa_results['x_history']:
-            y_star_t, _ = problem.solve_lower_level(x_t)
-            ul_f2csa_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
+        if f2csa_results is not None:
+            ul_f2csa_crn = []
+            for x_t in f2csa_results['x_history']:
+                y_star_t, _ = problem.solve_lower_level(x_t)
+                ul_f2csa_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
+            ul_f2csa = ul_f2csa_crn
         ul_dsblo_crn = []
         for x_t in dsblo_results['x_history']:
             y_star_t, _ = problem.solve_lower_level(x_t)
             ul_dsblo_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
-        ul_f2csa = ul_f2csa_crn
         ul_dsblo = ul_dsblo_crn
 
     # Optional noisy overlay: Monte Carlo mean±std with fresh noise per point
@@ -172,8 +275,11 @@ def run_exact_sbatch_vs_dsblo():
         m_ds, s_ds = mc_ul(dsblo_results['x_history'])
     
     # Plot 1: Upper-level loss comparison
-    ax1.plot(ul_f2csa, label='F2CSA', linewidth=2)
+    if ul_f2csa is not None:
+        ax1.plot(ul_f2csa, label='F2CSA', linewidth=2)
     ax1.plot(ul_dsblo, label='DS-BLO', linewidth=2)
+    if dsblo_legacy_results is not None:
+        ax1.plot(dsblo_legacy_results['ul_losses'], label='DS-BLO (Legacy)', linewidth=2, linestyle=':')
     ax1.set_xlabel('Iteration')
     ax1.set_ylabel('Upper-level Loss')
     ax1.set_title('Upper-level Loss Comparison')
@@ -190,8 +296,11 @@ def run_exact_sbatch_vs_dsblo():
         ax1.fill_between(it_ds, m_ds - s_ds, m_ds + s_ds, color='C1', alpha=0.15)
     
     # Plot 2: Gradient norm comparison
-    ax2.plot(f2csa_results['hypergrad_norms'], label='F2CSA (SBATCH Config)', linewidth=2)
+    if f2csa_results is not None:
+        ax2.plot(f2csa_results['hypergrad_norms'], label='F2CSA (SBATCH Config)', linewidth=2)
     ax2.plot(dsblo_results['hypergrad_norms'], label='DS-BLO', linewidth=2)
+    if dsblo_legacy_results is not None:
+        ax2.plot(dsblo_legacy_results['hypergrad_norms'], label='DS-BLO (Legacy)', linewidth=2, linestyle=':')
     ax2.set_xlabel('Iteration')
     ax2.set_ylabel('Hypergradient Norm')
     ax2.set_title('Hypergradient Norm Comparison')
@@ -200,21 +309,27 @@ def run_exact_sbatch_vs_dsblo():
     ax2.set_yscale('log')
     
     # Plot 3: F2CSA trajectory
-    x_history = torch.stack(f2csa_results['x_history'])
-    ax3.plot(x_history[:, 0], x_history[:, 1], 'b-', alpha=0.7, linewidth=1)
-    ax3.scatter(x_history[0, 0], x_history[0, 1], color='green', s=100, label='Start', zorder=5)
-    ax3.scatter(x_history[-1, 0], x_history[-1, 1], color='red', s=100, label='End', zorder=5)
-    ax3.set_xlabel('x[0]')
-    ax3.set_ylabel('x[1]')
-    ax3.set_title('F2CSA Trajectory (First 2 Dimensions)')
-    ax3.legend()
-    ax3.grid(True, alpha=0.3)
+    if f2csa_results is not None:
+        x_history = torch.stack(f2csa_results['x_history'])
+        ax3.plot(x_history[:, 0], x_history[:, 1], 'b-', alpha=0.7, linewidth=1)
+        ax3.scatter(x_history[0, 0], x_history[0, 1], color='green', s=100, label='Start', zorder=5)
+        ax3.scatter(x_history[-1, 0], x_history[-1, 1], color='red', s=100, label='End', zorder=5)
+        ax3.set_xlabel('x[0]')
+        ax3.set_ylabel('x[1]')
+        ax3.set_title('F2CSA Trajectory (First 2 Dimensions)')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+    else:
+        ax3.axis('off')
     
     # Plot 4: DS-BLO trajectory
     x_history_dsblo = torch.stack(dsblo_results['x_history'])
-    ax4.plot(x_history_dsblo[:, 0], x_history_dsblo[:, 1], 'r-', alpha=0.7, linewidth=1)
+    ax4.plot(x_history_dsblo[:, 0], x_history_dsblo[:, 1], 'r-', alpha=0.7, linewidth=1, label='DS-BLO')
     ax4.scatter(x_history_dsblo[0, 0], x_history_dsblo[0, 1], color='green', s=100, label='Start', zorder=5)
     ax4.scatter(x_history_dsblo[-1, 0], x_history_dsblo[-1, 1], color='red', s=100, label='End', zorder=5)
+    if dsblo_legacy_results is not None:
+        x_hist_legacy = torch.stack(dsblo_legacy_results['x_history'])
+        ax4.plot(x_hist_legacy[:, 0], x_hist_legacy[:, 1], 'm--', alpha=0.7, linewidth=1, label='DS-BLO (Legacy)')
     ax4.set_xlabel('x[0]')
     ax4.set_ylabel('x[1]')
     ax4.set_title('DS-BLO Trajectory (First 2 Dimensions)')
@@ -233,10 +348,19 @@ def run_exact_sbatch_vs_dsblo():
     print(f"{'Metric':<25} {'F2CSA (SBATCH)':<20} {'DS-BLO':<20} {'Winner':<15}")
     print("-" * 80)
     print(f"{'Initial UL Loss':<25} {initial_ul_loss:<20.6f} {initial_ul_loss:<20.6f} {'Same':<15}")
-    print(f"{'Final UL Loss':<25} {f2csa_results['final_ul_loss']:<20.6f} {dsblo_results['final_ul_loss']:<20.6f} {'F2CSA' if f2csa_results['final_ul_loss'] < dsblo_results['final_ul_loss'] else 'DS-BLO':<15}")
-    print(f"{'Final Grad Norm':<25} {f2csa_results['final_gradient_norm']:<20.6f} {dsblo_results['final_gradient_norm']:<20.6f} {'F2CSA' if f2csa_results['final_gradient_norm'] < dsblo_results['final_gradient_norm'] else 'DS-BLO':<15}")
-    print(f"{'Converged':<25} {f2csa_results['converged']:<20} {dsblo_results['converged']:<20} {'F2CSA' if f2csa_results['converged'] and not dsblo_results['converged'] else 'DS-BLO' if dsblo_results['converged'] and not f2csa_results['converged'] else 'Both' if f2csa_results['converged'] and dsblo_results['converged'] else 'Neither':<15}")
-    print(f"{'Iterations':<25} {f2csa_results['iterations']:<20} {dsblo_results['iterations']:<20} {'Same':<15}")
+    if f2csa_results is not None:
+        print(f"{'Final UL Loss':<25} {f2csa_results['final_ul_loss']:<20.6f} {dsblo_results['final_ul_loss']:<20.6f} {'F2CSA' if f2csa_results['final_ul_loss'] < dsblo_results['final_ul_loss'] else 'DS-BLO':<15}")
+        print(f"{'Final Grad Norm':<25} {f2csa_results['final_gradient_norm']:<20.6f} {dsblo_results['final_gradient_norm']:<20.6f} {'F2CSA' if f2csa_results['final_gradient_norm'] < dsblo_results['final_gradient_norm'] else 'DS-BLO':<15}")
+        print(f"{'Converged':<25} {f2csa_results['converged']:<20} {dsblo_results['converged']:<20} {'F2CSA' if f2csa_results['converged'] and not dsblo_results['converged'] else 'DS-BLO' if dsblo_results['converged'] and not f2csa_results['converged'] else 'Both' if f2csa_results['converged'] and dsblo_results['converged'] else 'Neither':<15}")
+        print(f"{'Iterations':<25} {f2csa_results['iterations']:<20} {dsblo_results['iterations']:<20} {'Same':<15}")
+    else:
+        print(f"{'Final UL Loss':<25} {'-':<20} {dsblo_results['final_ul_loss']:<20.6f} {'DS-BLO':<15}")
+        print(f"{'Final Grad Norm':<25} {'-':<20} {dsblo_results['final_gradient_norm']:<20.6f} {'DS-BLO':<15}")
+        print(f"{'Converged':<25} {'-':<20} {dsblo_results['converged']:<20} {'DS-BLO':<15}")
+        print(f"{'Iterations':<25} {'-':<20} {dsblo_results['iterations']:<20} {'DS-BLO':<15}")
+    if dsblo_legacy_results is not None:
+        print(f"{'(Legacy) Final UL Loss':<25} {'-':<20} {dsblo_legacy_results['final_ul_loss']:<20.6f} {'DS-BLO (Legacy)':<15}")
+        print(f"{'(Legacy) Final Grad Norm':<25} {'-':<20} {dsblo_legacy_results['final_gradient_norm']:<20.6f} {'DS-BLO (Legacy)':<15}")
     print("=" * 80)
     
     return {

@@ -97,7 +97,8 @@ class DSBLOOptII:
                  noise_decay: float = 0.995, noise_min: float = 1e-3, grad_avg_k: int = 8,
                  gamma1: float = 1.0, gamma2: float = 1.0, beta: float = 0.8,
                  adapt_eta: bool = True, adapt_patience: int = 50, adapt_factor: float = 0.7,
-                 verbose: bool = False, log_every: int = 50, log_csv: Optional[str] = None) -> Dict:
+                 verbose: bool = False, log_every: int = 50, log_csv: Optional[str] = None,
+                 ul_track_noisy_ll: bool = False) -> Dict:
         print("🚀 DS-BLO Option II (stochastic) Algorithm")
         print("=" * 60)
         print(f"T = {T}, α = {alpha:.6f}, σ = {sigma:.3e}")
@@ -122,8 +123,26 @@ class DSBLOOptII:
         # add stochastic noise (Option II)
         m = m + sigma * torch.randn_like(m)
 
-        y_star, _ = self.problem.solve_lower_level(x)
-        ul_losses.append(self.problem.upper_objective(x, y_star).item())
+        if ul_track_noisy_ll:
+            noise_up_track, noise_lo_track = self.problem._sample_instance_noise()
+            # Solve LL with noisy lower matrix for tracking (analytic + simple projection)
+            Q_lo = self.problem.Q_lower + noise_lo_track
+            y = -torch.linalg.solve(Q_lo, self.problem.c_lower)
+            h = self.problem.constraints(x, y)
+            violations = torch.clamp(h, min=0)
+            if torch.norm(violations) >= 1e-10:
+                correction = torch.zeros_like(y)
+                for i in range(self.problem.num_constraints):
+                    if violations[i] > 0:
+                        B_norm_sq = torch.norm(self.problem.B[i]) ** 2
+                        if B_norm_sq > 1e-10:
+                            correction += violations[i] * self.problem.B[i] / B_norm_sq
+                y = y - correction
+            ul_losses.append(self.problem.upper_objective(x, y, noise_up_track).item())
+        else:
+            noise_up_track, _ = self.problem._sample_instance_noise()
+            y_star, _ = self.problem.solve_lower_level(x)
+            ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
         hypergrad_norms.append(torch.norm(m).item())
 
         best_ul = float('inf')
@@ -204,8 +223,25 @@ class DSBLOOptII:
                       f" sigma={sigma:.2e} k={grad_avg_k}")
 
             # tracking
-            y_star, _ = self.problem.solve_lower_level(x)
-            ul_losses.append(self.problem.upper_objective(x, y_star).item())
+            if ul_track_noisy_ll:
+                noise_up_track, noise_lo_track = self.problem._sample_instance_noise()
+                Q_lo = self.problem.Q_lower + noise_lo_track
+                y = -torch.linalg.solve(Q_lo, self.problem.c_lower)
+                h = self.problem.constraints(x, y)
+                violations = torch.clamp(h, min=0)
+                if torch.norm(violations) >= 1e-10:
+                    correction = torch.zeros_like(y)
+                    for i in range(self.problem.num_constraints):
+                        if violations[i] > 0:
+                            B_norm_sq = torch.norm(self.problem.B[i]) ** 2
+                            if B_norm_sq > 1e-10:
+                                correction += violations[i] * self.problem.B[i] / B_norm_sq
+                    y = y - correction
+                ul_losses.append(self.problem.upper_objective(x, y, noise_up_track).item())
+            else:
+                noise_up_track, _ = self.problem._sample_instance_noise()
+                y_star, _ = self.problem.solve_lower_level(x)
+                ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
             hypergrad_norms.append(torch.norm(m).item())
             x_history.append(x.clone().detach())
 
