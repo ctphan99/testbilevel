@@ -40,7 +40,7 @@ class F2CSAAlgorithm1Final:
     
     def _solve_lower_level_accurate(self, x: torch.Tensor, alpha: float, prev_y: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """
-        Solve lower-level problem accurately using CVXPY with optional warm start.
+        Solve lower-level problem accurately using CVXPY with SCS solver.
         Returns y_star, lambda_star, and solution info
         """
         try:
@@ -70,9 +70,9 @@ class F2CSAAlgorithm1Final:
             # Constraints: A @ x + B @ y - b <= 0
             constraints = [A_np @ x_np + B_np @ y - b_np <= 0]
             
-            # Solve
+            # Solve using SCS solver
             problem_cvx = cp.Problem(objective, constraints)
-            problem_cvx.solve(verbose=False, solver=cp.OSQP, warm_start=True)
+            problem_cvx.solve(verbose=False, solver=cp.SCS, warm_start=True)
             
             if problem_cvx.status == cp.OPTIMAL:
                 y_star = torch.tensor(y.value, dtype=self.dtype, device=self.device)
@@ -92,7 +92,7 @@ class F2CSAAlgorithm1Final:
                     'constraint_violations': violations,
                     'converged': True,
                     'max_violation': max_violation,
-                    'solver': 'CVXPY'
+                    'solver': 'CVXPY-SCS'
                 }
                 
                 return y_star, lambda_star, info
@@ -100,102 +100,113 @@ class F2CSAAlgorithm1Final:
                 raise ValueError(f"CVXPY solve failed with status: {problem_cvx.status}")
                 
         except ImportError:
-            print("CVXPY not available, falling back to PGD")
-            return self._solve_lower_level_pgd(x, alpha)
+            print("CVXPY not available, falling back to SGD")
+            return self._solve_lower_level_sgd(x, alpha)
         except Exception as e:
-            print(f"CVXPY solve failed: {e}, falling back to PGD")
-            return self._solve_lower_level_pgd(x, alpha)
+            print(f"CVXPY solve failed: {e}, falling back to SGD")
+            return self._solve_lower_level_sgd(x, alpha)
     
-    def _solve_lower_level_pgd(self, x: torch.Tensor, alpha: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+    def _solve_lower_level_sgd(self, x: torch.Tensor, alpha: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """
-        Fallback: Solve using projected gradient descent
+        Fallback: Solve using SGD with penalty method
         """
         # Initialize at unconstrained optimum
         y = -torch.linalg.solve(self.problem.Q_lower, self.problem.c_lower)
+        y.requires_grad_(True)
         
-        # Use small learning rate for stability
-        lr = 0.01
+        # Use SGD optimizer
+        optimizer = torch.optim.SGD([y], lr=0.01)
+        
+        # Penalty parameter for constraints
+        penalty_weight = 1000.0
         max_iter = 1000
         tol = 1e-6
         
         for i in range(max_iter):
-            # Gradient of lower-level objective
-            grad_g = self.problem.Q_lower @ y + self.problem.c_lower
+            optimizer.zero_grad()
             
-            # Gradient step
-            y_new = y - lr * grad_g
+            # Lower-level objective
+            obj = 0.5 * torch.sum(y * (self.problem.Q_lower @ y)) + torch.sum(self.problem.c_lower * y)
             
-            # Project onto feasible region: h(x,y) ≤ 0
-            y = self._project_onto_constraints(x, y_new)
+            # Penalty for constraint violations
+            h = self.problem.constraints(x, y)
+            penalty = penalty_weight * torch.sum(torch.clamp(h, min=0) ** 2)
+            
+            # Total loss
+            total_loss = obj + penalty
+            total_loss.backward()
+            
+            optimizer.step()
             
             # Check convergence
-            grad_norm = torch.norm(grad_g)
+            grad_norm = torch.norm(y.grad)
             if grad_norm < tol:
                 break
         
-        # Compute dual variables (Lagrange multipliers)
+        # Compute dual variables (Lagrange multipliers) from penalty
         h = self.problem.constraints(x, y)
-        lambda_opt = torch.clamp(-h, min=0)  # KKT conditions
+        lambda_opt = penalty_weight * torch.clamp(h, min=0)  # Approximate dual variables
         
         info = {
             'status': 'optimal',
             'iterations': i + 1,
             'lambda': lambda_opt,
-            'constraint_violations': self.problem.constraint_violations(x, y),
+            'constraint_violations': torch.clamp(h, min=0),
             'converged': grad_norm < tol,
             'max_violation': torch.max(torch.clamp(h, min=0)).item(),
-            'solver': 'PGD'
+            'solver': 'SGD'
         }
         
-        return y, lambda_opt, info
+        return y.detach(), lambda_opt.detach(), info
     
-    def _project_onto_constraints(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """
-        Project y onto feasible region {y : h(x,y) ≤ 0}
-        """
-        h = self.problem.constraints(x, y)
-        violations = torch.clamp(h, min=0)
-        
-        if torch.norm(violations) < 1e-10:
-            return y  # Already feasible
-        
-        # Move in direction of constraint normals to restore feasibility
-        correction = torch.zeros_like(y)
-        for i in range(self.problem.num_constraints):
-            if violations[i] > 0:
-                # Move in direction of B[i] to satisfy constraint i
-                B_norm_sq = torch.norm(self.problem.B[i])**2
-                if B_norm_sq > 1e-10:
-                    correction += violations[i] * self.problem.B[i] / B_norm_sq
-        
-        return y - correction
     
     def _compute_smooth_activation(self, h_val: torch.Tensor, lambda_val: torch.Tensor, delta: float) -> torch.Tensor:
         """
-        Compute smooth activation function ρ_i(x) = σ_h(h_i(x,y)) + σ_λ(λ_i)
-        Following F2CSA_corrected.tex exactly
+        Compute smooth activation function ρ_i(x) = σ_h(h_i(x,y)) · σ_λ(λ_i)
+        Following F2CSA.tex exactly with piecewise linear functions
         """
-        # σ_h(z) = max(0, z) - smooth approximation
-        sigma_h = torch.clamp(h_val, min=0.0)
+        # Parameters from paper
+        tau = delta  # τ = Θ(δ)
+        epsilon_lambda = 1e-6  # Small positive parameter
         
-        # σ_λ(z) = max(0, z) - smooth approximation  
-        sigma_lambda = torch.clamp(lambda_val, min=0.0)
+        # σ_h(z) piecewise linear function
+        sigma_h = torch.zeros_like(h_val)
+        mask1 = h_val < -tau * delta
+        mask2 = (h_val >= -tau * delta) & (h_val < 0)
+        mask3 = h_val >= 0
         
-        # ρ_i(x) = σ_h(h_i(x,y)) + σ_λ(λ_i)
-        rho = sigma_h + sigma_lambda
+        sigma_h[mask1] = 0.0
+        sigma_h[mask2] = (tau * delta + h_val[mask2]) / (tau * delta)
+        sigma_h[mask3] = 1.0
+        
+        # σ_λ(z) piecewise linear function
+        sigma_lambda = torch.zeros_like(lambda_val)
+        mask1_lambda = lambda_val <= 0
+        mask2_lambda = (lambda_val > 0) & (lambda_val < epsilon_lambda)
+        mask3_lambda = lambda_val >= epsilon_lambda
+        
+        sigma_lambda[mask1_lambda] = 0.0
+        sigma_lambda[mask2_lambda] = lambda_val[mask2_lambda] / epsilon_lambda
+        sigma_lambda[mask3_lambda] = 1.0
+        
+        # ρ_i(x) = σ_h(h_i(x,y)) · σ_λ(λ_i) - MULTIPLICATION, not addition!
+        rho = sigma_h * sigma_lambda
         
         return rho
     
     def _compute_penalty_lagrangian(self, x: torch.Tensor, y: torch.Tensor, 
                                   y_star: torch.Tensor, lambda_star: torch.Tensor,
-                                  alpha: float, delta: float) -> torch.Tensor:
+                                  alpha: float, delta: float, noise_upper: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Compute the smooth penalty Lagrangian L_{λ̃,α}(x,y) with corrected parameters
-        α₁ = α⁻¹, α₂ = α⁻² (following F2CSA_corrected.tex)
+        Compute the smooth penalty Lagrangian L_{λ̃,α}(x,y) = f(x,y) + α₁(...) + α₂(...)
+        Following F2CSA.tex Equation (415) exactly
         """
         # Penalty parameters per F2CSA.tex
         alpha1 = 1.0 / (alpha ** 2)  # α₁ = α⁻²
         alpha2 = 1.0 / (alpha ** 4)  # α₂ = α⁻⁴
+        
+        # First term: f(x,y) - upper-level objective
+        f_val = self.problem.upper_objective(x, y, noise_upper=noise_upper)
         
         # Compute constraint values
         h_val = self.problem.constraints(x, y)
@@ -203,17 +214,16 @@ class F2CSAAlgorithm1Final:
         # Compute smooth activation
         rho = self._compute_smooth_activation(h_val, lambda_star, delta)
         
-        # Compute penalty terms following F2CSA_corrected.tex Equation
-        # Term 1: α₁ * (g(x,y) + λ̃^T h(x,y) - g(x,ỹ*(x)))
+        # Second term: α₁ * (g(x,y) + λ̃^T h(x,y) - g(x,ỹ*(x)))
         g_xy = self.problem.lower_objective(x, y)
         g_ystar = self.problem.lower_objective(x, y_star)
         term1 = alpha1 * (g_xy + torch.sum(lambda_star * h_val) - g_ystar)
         
-        # Term 2: α₂/2 * Σ_i ρ_i(x) * h_i(x,y)²
+        # Third term: α₂/2 * Σ_i ρ_i(x) * h_i(x,y)²
         term2 = (alpha2 / 2.0) * torch.sum(rho * (h_val ** 2))
         
-        # Total penalty Lagrangian
-        L_penalty = term1 + term2
+        # Complete penalty Lagrangian: L_{λ̃,α}(x,y) = f(x,y) + α₁(...) + α₂(...)
+        L_penalty = f_val + term1 + term2
         
         return L_penalty
     
@@ -344,15 +354,20 @@ class F2CSAAlgorithm1Final:
         print(f"  Computing stochastic hypergradient with N_g = {N_g}")
         
         # Step 5: Compute ∇F̃(x) = (1/N_g) Σ_{j=1}^{N_g} ∇_x L̃_{λ̃,α}(x, ỹ(x); ξ_j)
+        # The penalty Lagrangian L_{λ̃,α}(x,y) already includes f(x,y) as the first term
         hypergradient_samples = []
         
         for j in range(N_g):
+            # Sample noise for stochastic evaluation
             noise_upper, _ = self.problem._sample_instance_noise()
             x_grad = x.clone().detach().requires_grad_(True)
-            L_val = self._compute_penalty_lagrangian(x_grad, y_tilde, y_star, lambda_star, alpha, delta)
-            f_val = self.problem.upper_objective(x_grad, y_tilde, noise_upper=noise_upper)
-            total_val = f_val + L_val
-            grad_x = torch.autograd.grad(total_val, x_grad, create_graph=True, retain_graph=True)[0]
+            
+            # Compute the penalty Lagrangian L_{λ̃,α}(x,y) with stochastic noise
+            # This includes f(x,y) + α₁(...) + α₂(...) as per Equation (415)
+            L_val = self._compute_penalty_lagrangian(x_grad, y_tilde, y_star, lambda_star, alpha, delta, noise_upper)
+            
+            # Compute gradient of the complete penalty Lagrangian
+            grad_x = torch.autograd.grad(L_val, x_grad, create_graph=True, retain_graph=True)[0]
             hypergradient_samples.append(grad_x.detach())
         
         hypergradient = torch.stack(hypergradient_samples).mean(dim=0)

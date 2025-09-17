@@ -122,10 +122,8 @@ class DSBLOOptII:
         # add stochastic noise (Option II)
         m = m + sigma * torch.randn_like(m)
 
-        # Track UL loss at current point x with fresh instance noise (raw noise)
-        noise_up_track, _ = self.problem._sample_instance_noise()
         y_star, _ = self.problem.solve_lower_level(x)
-        ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
+        ul_losses.append(self.problem.upper_objective(x, y_star).item())
         hypergrad_norms.append(torch.norm(m).item())
 
         best_ul = float('inf')
@@ -205,10 +203,9 @@ class DSBLOOptII:
                       f" ||noise_up||_F={torch.norm(noise_up_s).item():.3e} ||noise_lo||_F={torch.norm(noise_lo_s).item():.3e}"
                       f" sigma={sigma:.2e} k={grad_avg_k}")
 
-            # tracking UL loss at current point x with fresh instance noise (raw noise)
-            noise_up_track, _ = self.problem._sample_instance_noise()
+            # tracking
             y_star, _ = self.problem.solve_lower_level(x)
-            ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
+            ul_losses.append(self.problem.upper_objective(x, y_star).item())
             hypergrad_norms.append(torch.norm(m).item())
             x_history.append(x.clone().detach())
 
