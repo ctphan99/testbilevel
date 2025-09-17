@@ -1,8 +1,8 @@
 ﻿#!/bin/bash
-# Phoenix Slurm batch script for F2CSA/DS-BLO combined comparison alpha sweep (CPU-AMD)
-# Uses cpu-amd partition (AMD Epyc 7713, 64 cores/node, 512GB RAM)
+# Phoenix Slurm batch script for F2CSA/DS-BLO combined comparison grid sweep (CPU-AMD)
+# Runs a parameter grid across alpha, eta, D, Ng as a Slurm job array
 
-#SBATCH -J f2csa-dsblo-alpha
+#SBATCH -J f2csa-dsblo-grid
 #SBATCH -o logs/%x-%A_%a.out
 #SBATCH -e logs/%x-%A_%a.err
 #SBATCH -t 24:00:00
@@ -11,6 +11,7 @@
 #SBATCH --partition=cpu-amd
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=4
+# --array set dynamically below; keep placeholder here
 #SBATCH --array=0-8
 
 # Create logs directory
@@ -26,35 +27,64 @@ else
     export PYTHONPATH=/storage/scratch1/6/cphan36/python_packages/lib/python3.10/site-packages:$PYTHONPATH
 fi
 
-# Workdir
-cd $SLURM_SUBMIT_DIR
+# Workdir: cd to the directory of this sbatch file (which should be testbilevel)
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$SCRIPT_DIR"
 
-# Ensure Python can find site packages
+# Ensure Python can find site packages and sibling legacy repo
 export PYTHONPATH=/storage/scratch1/6/cphan36/python_packages/lib/python3.10/site-packages:$PYTHONPATH
+export PYTHONPATH=$(cd "$SCRIPT_DIR/.." && pwd)/BilevelLinearConstraints:$PYTHONPATH
 
-# Alpha sweep values per array task index
+# Parameter grids
 ALPHA_LIST=(0.05 0.10 0.15 0.20 0.25 0.30 0.40 0.50 0.60)
-TASK_IDX=${SLURM_ARRAY_TASK_ID}
-TASK_ALPHA=${ALPHA_LIST[$TASK_IDX]}
+ETA_LIST=(2e-4 1e-4 5e-5)
+D_LIST=(0.08 0.05 0.03)
+NG_LIST=(32 64 96)
+
+NA=${#ALPHA_LIST[@]}
+NE=${#ETA_LIST[@]}
+ND=${#D_LIST[@]}
+NN=${#NG_LIST[@]}
+TOTAL=$((NA * NE * ND * NN))
+
+# If controller didn't expand array bounds, print suggestion
+if [[ -n "$SLURM_ARRAY_TASK_ID" ]]; then
+  : # running inside array
+else
+  echo "Hint: submit with --array=0-$((TOTAL-1)) to cover all $TOTAL tasks"
+fi
+
+# Map array index -> grid indices
+TID=${SLURM_ARRAY_TASK_ID}
+E_IDX=$(( (TID / 1) % NE ))
+D_IDX=$(( (TID / NE) % ND ))
+N_IDX=$(( (TID / (NE*ND)) % NN ))
+A_IDX=$(( (TID / (NE*ND*NN)) % NA ))
+
+TASK_ALPHA=${ALPHA_LIST[$A_IDX]}
+ETA=${ETA_LIST[$E_IDX]}
+D=${D_LIST[$D_IDX]}
+NG=${NG_LIST[$N_IDX]}
 
 # Fixed params per your test command
 T=500
-D=0.08
-ETA=2e-4
-NG=32
 SEED=1234
 NOISE_STD=2e-3
 
 # Echo task config
-echo "Array task $TASK_IDX: alpha=$TASK_ALPHA, D=$D, eta=$ETA, Ng=$NG, seed=$SEED"
+echo "Array task $SLURM_ARRAY_TASK_ID of $((TOTAL-1)): alpha=$TASK_ALPHA, D=$D, eta=$ETA, Ng=$NG, seed=$SEED"
+echo "SCRIPT_DIR=$SCRIPT_DIR"
+echo "PYTHONPATH=$PYTHONPATH"
 
 # Run combined comparison: F2CSA + DS-BLO (normal) + DS-BLO (Legacy)
+# Add warm-ll/keep-adam-state and use-crn-ul for smoothing and fair visual comparison
 srun -n 1 python exact_sbatch_vs_dsblo.py \
   --T $T \
   --D $D \
   --eta $ETA \
   --Ng $NG \
   --alpha $TASK_ALPHA \
+  --warm-ll --keep-adam-state \
   --problem-noise-std $NOISE_STD \
   --seed $SEED \
   --dsblo-opt II \
@@ -65,6 +95,8 @@ srun -n 1 python exact_sbatch_vs_dsblo.py \
   --dsblo-k 16 \
   --ul-scale symlog \
   --legacy-dsblo \
-  --plot-name exact_sbatch_vs_dsblo_f2csa_dsblo_legacy_normal_alpha${TASK_ALPHA}.png
+  --use-crn-ul \
+  --plot-name exact_sbatch_vs_dsblo_alpha${TASK_ALPHA}_D${D}_eta${ETA}_Ng${NG}.png
 
-# To submit: sbatch phoenix_f2csa_sweep.sbatch
+# To submit FULL GRID: sbatch --array=0-$((TOTAL-1)) phoenix_f2csa_sweep.sbatch
+# Example smaller sweep (alphas only): sbatch --array=0-$((NA-1)) phoenix_f2csa_sweep.sbatch
