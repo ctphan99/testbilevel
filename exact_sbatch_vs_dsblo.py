@@ -15,6 +15,7 @@ from f2csa_algorithm_corrected_final import F2CSAAlgorithm1Final
 from f2csa_algorithm2_working import F2CSAAlgorithm2Working
 from dsblo_conservative import DSBLOConservative
 from dsblo_optII import DSBLOOptII
+from ssigd_correct_final import CorrectSSIGD
 import warnings
 
 # Legacy DsBlo adapter imports
@@ -125,6 +126,7 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--seed', type=int, default=None, help='Random seed for shared x0')
     parser.add_argument('--legacy-dsblo', action='store_true', help='Run DsBlo (algorithms.py) on a fixed noisy instance')
     parser.add_argument('--only-dsblo', action='store_true', help='Run only DS-BLO and plot its results')
+    parser.add_argument('--with-ssigd', action='store_true', help='Include SSIGD in comparison')
     parser.add_argument('--ul-track-noisy-ll', action='store_true', help='Track UL using LL solved with noisy Q_lower each iter (DS-BLO)')
     
     args = parser.parse_args()
@@ -146,10 +148,8 @@ def run_exact_sbatch_vs_dsblo():
         torch.manual_seed(args.seed)
 
     # Create problem instance (optionally align noise std)
-    if args.problem_noise_std is None:
-        problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints)
-    else:
-        problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints, noise_std=args.problem_noise_std)
+    noise_std = args.problem_noise_std if args.problem_noise_std is not None else 0.1
+    problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints, noise_std=noise_std)
     
     # Initialize starting point
     x0 = torch.randn(args.dim, dtype=torch.float64)
@@ -170,7 +170,7 @@ def run_exact_sbatch_vs_dsblo():
         print("=" * 50)
         
         algorithm2 = F2CSAAlgorithm2Working(problem)
-        delta = 0.216  # Default delta value
+        delta = args.alpha ** 3
         
         f2csa_results = algorithm2.optimize(
             x0, args.T, args.D, args.eta, delta, args.alpha, args.Ng,
@@ -191,27 +191,6 @@ def run_exact_sbatch_vs_dsblo():
     print("RUNNING DS-BLO (SAME PROBLEM)")
     print("=" * 50)
     
-    dsblo_legacy_results = None
-    if args.legacy_dsblo:
-        if LegacyDsBlo is None:
-            raise RuntimeError('Legacy DsBlo not available: algorithms.py not found')
-        x0_np = x0.cpu().numpy().reshape(-1,1)
-        y0_np = np.zeros((args.dim,1))
-        legacy = LegacyNoisyProblemAdapter(problem)
-        dsblo_legacy = LegacyDsBlo(legacy, out_iter=args.T, gamma1=args.dsblo_gamma1, gamma2=args.dsblo_gamma2, beta=args.dsblo_beta)
-        dsblo_legacy.run(x0_np, y0_np)
-        ul_losses = dsblo_legacy.loss
-        hypergrad_norms = dsblo_legacy.gradF
-        x_hist = [torch.from_numpy(xx.squeeze()).to(torch.float64) for xx in dsblo_legacy.x_iter]
-        dsblo_legacy_results = {
-            'final_ul_loss': ul_losses[-1],
-            'final_gradient_norm': hypergrad_norms[-1],
-            'converged': False,
-            'iterations': args.T,
-            'ul_losses': ul_losses,
-            'hypergrad_norms': hypergrad_norms,
-            'x_history': x_hist,
-        }
     if args.dsblo_opt == 'II':
         dsblo = DSBLOOptII(problem)
         dsblo_results = dsblo.optimize(
@@ -235,6 +214,53 @@ def run_exact_sbatch_vs_dsblo():
     print(f"  Converged: {dsblo_results['converged']}")
     print(f"  Iterations: {dsblo_results['iterations']}")
     print()
+
+    dsblo_legacy_results = None
+    if args.legacy_dsblo:
+        if LegacyDsBlo is None:
+            raise RuntimeError('Legacy DsBlo not available: algorithms.py not found')
+        x0_np = x0.cpu().numpy().reshape(-1,1)
+        y0_np = np.zeros((args.dim,1))
+        legacy = LegacyNoisyProblemAdapter(problem)
+        dsblo_legacy = LegacyDsBlo(legacy, out_iter=args.T, gamma1=args.dsblo_gamma1, gamma2=args.dsblo_gamma2, beta=args.dsblo_beta)
+        dsblo_legacy.run(x0_np, y0_np)
+        ul_losses = dsblo_legacy.loss
+        hypergrad_norms = dsblo_legacy.gradF
+        x_hist = [torch.from_numpy(xx.squeeze()).to(torch.float64) for xx in dsblo_legacy.x_iter]
+        dsblo_legacy_results = {
+            'final_ul_loss': ul_losses[-1],
+            'final_gradient_norm': hypergrad_norms[-1],
+            'converged': False,
+            'iterations': args.T,
+            'ul_losses': ul_losses,
+            'hypergrad_norms': hypergrad_norms,
+            'x_history': x_hist,
+        }
+
+    # Run SSIGD if requested
+    ssigd_results = None
+    if args.with_ssigd:
+        print("=" * 50)
+        print("RUNNING SSIGD")
+        print("=" * 50)
+        ssigd_algo = CorrectSSIGD(problem)
+        x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd = ssigd_algo.solve(T=args.T, beta=args.eta, x0=x0)
+        ssigd_results = {
+            'final_ul_loss': ul_losses_ssigd[-1],
+            'final_gradient_norm': hypergrad_norms_ssigd[-1],
+            'converged': hypergrad_norms_ssigd[-1] < 1e-2,  # Heuristic
+            'iterations': args.T,
+            'ul_losses': ul_losses_ssigd,
+            'hypergrad_norms': hypergrad_norms_ssigd,
+            'x_history': [x_ssigd] * args.T  # SSIGD only returns final x, so replicate for history
+        }
+        print()
+        print("SSIGD Results:")
+        print(f"  Final UL loss: {ssigd_results['final_ul_loss']:.6f}")
+        print(f"  Final gradient norm: {ssigd_results['final_gradient_norm']:.6f}")
+        print(f"  Converged: {ssigd_results['converged']}")
+        print(f"  Iterations: {ssigd_results['iterations']}")
+        print()
     
     # Create comparison plot
     print("Creating comparison plot...")
@@ -293,6 +319,8 @@ def run_exact_sbatch_vs_dsblo():
     if ul_f2csa is not None:
         ax1.plot(ul_f2csa, label='F2CSA', linewidth=2)
     ax1.plot(ul_dsblo, label='DS-BLO', linewidth=2)
+    if ssigd_results is not None:
+        ax1.plot(ssigd_results['ul_losses'], label='SSIGD', linewidth=2)
     if dsblo_legacy_results is not None:
         ax1.plot(dsblo_legacy_results['ul_losses'], label='DS-BLO (Legacy)', linewidth=2, linestyle=':')
     ax1.set_xlabel('Iteration')
@@ -319,6 +347,8 @@ def run_exact_sbatch_vs_dsblo():
     if f2csa_results is not None:
         ax2.plot(f2csa_results['hypergrad_norms'], label='F2CSA (SBATCH Config)', linewidth=2)
     ax2.plot(dsblo_results['hypergrad_norms'], label='DS-BLO', linewidth=2)
+    if ssigd_results is not None:
+        ax2.plot(ssigd_results['hypergrad_norms'], label='SSIGD', linewidth=2)
     if dsblo_legacy_results is not None:
         ax2.plot(dsblo_legacy_results['hypergrad_norms'], label='DS-BLO (Legacy)', linewidth=2, linestyle=':')
     ax2.set_xlabel('Iteration')
@@ -347,6 +377,9 @@ def run_exact_sbatch_vs_dsblo():
     ax4.plot(x_history_dsblo[:, 0], x_history_dsblo[:, 1], 'r-', alpha=0.7, linewidth=1, label='DS-BLO')
     ax4.scatter(x_history_dsblo[0, 0], x_history_dsblo[0, 1], color='green', s=100, label='Start', zorder=5)
     ax4.scatter(x_history_dsblo[-1, 0], x_history_dsblo[-1, 1], color='red', s=100, label='End', zorder=5)
+    if ssigd_results is not None:
+        x_history_ssigd = torch.stack(ssigd_results['x_history'])
+        ax4.plot(x_history_ssigd[:, 0], x_history_ssigd[:, 1], 'g-', alpha=0.7, linewidth=1, label='SSIGD')
     if dsblo_legacy_results is not None:
         x_hist_legacy = torch.stack(dsblo_legacy_results['x_history'])
         ax4.plot(x_hist_legacy[:, 0], x_hist_legacy[:, 1], 'm--', alpha=0.7, linewidth=1, label='DS-BLO (Legacy)')
@@ -381,6 +414,9 @@ def run_exact_sbatch_vs_dsblo():
     if dsblo_legacy_results is not None:
         print(f"{'(Legacy) Final UL Loss':<25} {'-':<20} {dsblo_legacy_results['final_ul_loss']:<20.6f} {'DS-BLO (Legacy)':<15}")
         print(f"{'(Legacy) Final Grad Norm':<25} {'-':<20} {dsblo_legacy_results['final_gradient_norm']:<20.6f} {'DS-BLO (Legacy)':<15}")
+    if ssigd_results is not None:
+        print(f"{'SSIGD Final UL Loss':<25} {'-':<20} {'-':<20} {ssigd_results['final_ul_loss']:<20.6f} {'SSIGD':<15}")
+        print(f"{'SSIGD Final Grad Norm':<25} {'-':<20} {'-':<20} {ssigd_results['final_gradient_norm']:<20.6f} {'SSIGD':<15}")
     print("=" * 80)
     
     return {
