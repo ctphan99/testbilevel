@@ -36,7 +36,15 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--constraints', type=int, default=3, help='Number of constraints')
     # removed external perturbation; rely on per-sample instance noise from problem
     parser.add_argument('--dsblo-opt', type=str, choices=['I', 'II'], default='II', help='DS-BLO option (I deterministic, II stochastic)')
-    parser.add_argument('--dsblo-sigma', type=float, default=1e-2, help='Stochastic noise std for DS-BLO Option II')
+    parser.add_argument('--dsblo-sigma', type=float, default=0.0, help='Extra stochastic noise std for DS-BLO (set 0 to rely on instance noise only)')
+    parser.add_argument('--dsblo-gamma1', type=float, default=5.0, help='DS-BLO gamma1 for step size')
+    parser.add_argument('--dsblo-gamma2', type=float, default=1.0, help='DS-BLO gamma2 for step size')
+    parser.add_argument('--dsblo-beta', type=float, default=0.6, help='DS-BLO momentum beta')
+    parser.add_argument('--dsblo-k', type=int, default=16, help='DS-BLO gradient averaging samples')
+    parser.add_argument('--dsblo-eta-cap', type=float, default=1e-3, help='DS-BLO eta cap baseline')
+    parser.add_argument('--use-crn-ul', action='store_true', help='Plot UL with a single fixed CRN noise for both methods')
+    parser.add_argument('--ul-scale', type=str, choices=['linear','symlog'], default='linear', help='Y-scale for UL plots')
+    parser.add_argument('--ul-overlay-noisy', action='store_true', help='Overlay MC mean±std with fresh noise per iter')
     parser.add_argument('--problem-noise-std', type=float, default=None, help='Instance noise std for problem; default keeps current')
     parser.add_argument('--seed', type=int, default=None, help='Random seed for shared x0')
     
@@ -104,7 +112,15 @@ def run_exact_sbatch_vs_dsblo():
     
     if args.dsblo_opt == 'II':
         dsblo = DSBLOOptII(problem)
-        dsblo_results = dsblo.optimize(x0, args.T, args.alpha, sigma=args.dsblo_sigma)
+        dsblo_results = dsblo.optimize(
+            x0, args.T, args.alpha,
+            sigma=args.dsblo_sigma,
+            grad_avg_k=args.dsblo_k,
+            gamma1=args.dsblo_gamma1,
+            gamma2=args.dsblo_gamma2,
+            beta=args.dsblo_beta,
+            eta_cap=args.dsblo_eta_cap,
+        )
     else:
         dsblo = DSBLOConservative(problem)
         dsblo_results = dsblo.optimize(x0, args.T, args.alpha)
@@ -121,16 +137,57 @@ def run_exact_sbatch_vs_dsblo():
     print("Creating comparison plot...")
     
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+
+    # Optionally recompute UL with a single fixed CRN noise for both methods
+    ul_f2csa = f2csa_results['ul_losses']
+    ul_dsblo = dsblo_results['ul_losses']
+    if args.use_crn_ul:
+        crn_up, _ = problem._sample_instance_noise()
+        # recompute along x histories with fixed noise
+        ul_f2csa_crn = []
+        for x_t in f2csa_results['x_history']:
+            y_star_t, _ = problem.solve_lower_level(x_t)
+            ul_f2csa_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
+        ul_dsblo_crn = []
+        for x_t in dsblo_results['x_history']:
+            y_star_t, _ = problem.solve_lower_level(x_t)
+            ul_dsblo_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
+        ul_f2csa = ul_f2csa_crn
+        ul_dsblo = ul_dsblo_crn
+
+    # Optional noisy overlay: Monte Carlo mean±std with fresh noise per point
+    if args.ul_overlay_noisy:
+        def mc_ul(x_hist, M=10):
+            means, stds = [], []
+            for x_t in x_hist:
+                vals = []
+                for _ in range(M):
+                    n_up, _ = problem._sample_instance_noise()
+                    y_star_t, _ = problem.solve_lower_level(x_t)
+                    vals.append(problem.upper_objective(x_t, y_star_t, n_up).item())
+                means.append(np.mean(vals))
+                stds.append(np.std(vals))
+            return np.array(means), np.array(stds)
+        m_f2, s_f2 = mc_ul(f2csa_results['x_history'])
+        m_ds, s_ds = mc_ul(dsblo_results['x_history'])
     
     # Plot 1: Upper-level loss comparison
-    ax1.plot(f2csa_results['ul_losses'], label='F2CSA (SBATCH Config)', linewidth=2)
-    ax1.plot(dsblo_results['ul_losses'], label='DS-BLO', linewidth=2)
+    ax1.plot(ul_f2csa, label='F2CSA', linewidth=2)
+    ax1.plot(ul_dsblo, label='DS-BLO', linewidth=2)
     ax1.set_xlabel('Iteration')
     ax1.set_ylabel('Upper-level Loss')
     ax1.set_title('Upper-level Loss Comparison')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
-    ax1.set_yscale('log')
+    if args.ul_scale == 'symlog':
+        ax1.set_yscale('symlog', linthresh=1.0)
+    if args.ul_overlay_noisy:
+        it_f2 = np.arange(len(m_f2))
+        it_ds = np.arange(len(m_ds))
+        ax1.plot(it_f2, m_f2, color='C0', alpha=0.6, linestyle='--', label='F2CSA (noisy mean)')
+        ax1.fill_between(it_f2, m_f2 - s_f2, m_f2 + s_f2, color='C0', alpha=0.15)
+        ax1.plot(it_ds, m_ds, color='C1', alpha=0.6, linestyle='--', label='DS-BLO (noisy mean)')
+        ax1.fill_between(it_ds, m_ds - s_ds, m_ds + s_ds, color='C1', alpha=0.15)
     
     # Plot 2: Gradient norm comparison
     ax2.plot(f2csa_results['hypergrad_norms'], label='F2CSA (SBATCH Config)', linewidth=2)

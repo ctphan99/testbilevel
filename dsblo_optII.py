@@ -108,17 +108,7 @@ class DSBLOOptII:
         x = x0.clone().detach()
         ul_losses = []
         hypergrad_norms = []
-        # debug metrics for numerical issues
-        grad_nan_count = 0
-        grad_inf_count = 0
-        m_nan_count = 0
-        m_inf_count = 0
         x_history = []
-        # cap sticky momentum
-        beta = min(beta, 0.7)
-        # trust-region radius (looser to avoid micro-steps)
-        delta = 5e-2
-        consec_increase = 0
 
         # q1 ~ Q (LL perturbation)
         q = torch.randn(self.problem.dim, dtype=self.dtype, device=self.device)
@@ -132,19 +122,18 @@ class DSBLOOptII:
         # add stochastic noise (Option II)
         m = m + sigma * torch.randn_like(m)
 
-        # seed UL with initial instance noise for consistency
+        # Track UL loss at current point x with fresh instance noise (raw noise)
+        noise_up_track, _ = self.problem._sample_instance_noise()
         y_star, _ = self.problem.solve_lower_level(x)
-        ul_losses.append(self.problem.upper_objective(x, y_star, noise_up).item())
+        ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
         hypergrad_norms.append(torch.norm(m).item())
 
         best_ul = float('inf')
         since_best = 0
         for t in range(1, T + 1):
-            # momentum step with trust-region cap; keep baseline eta_cap (do not overwrite it)
             grad_norm = torch.norm(m)
-            eta_raw_m = 1.0 / (gamma1 * max(grad_norm.item(), 1e-12) + gamma2)
-            eta_tr_m = delta / (grad_norm.item() + 1e-12)
-            eta = min(eta_raw_m, eta_cap, eta_tr_m)
+            eta = 1.0 / (gamma1 * grad_norm + gamma2)
+            eta = min(eta, eta_cap)
 
             x_prev = x.clone()
             x = x - eta * m
@@ -152,24 +141,7 @@ class DSBLOOptII:
             # xbar ~ U[x_t, x_{t+1}] (second perturbation)
             xbar = torch.rand_like(x) * (x - x_prev) + x_prev
 
-            # per-iteration CRN pair for probes/diagnostics only
-            crn_up, crn_lo = self.problem._sample_instance_noise()
-            # compute CRN-based feasibility at x (stabilizes triggers)
-            q_crn = torch.randn(self.problem.dim, dtype=self.dtype, device=self.device)
-            q_crn = 1e-6 * (q_crn / torch.norm(q_crn))
-            yhat_crn = self.solve_ll_perturbed(x, q_crn, crn_lo)
-            Aact_crn, Bact_crn = self.active(x, yhat_crn)
-            viol_crn = torch.clamp(self.problem.constraints(x, yhat_crn), min=0)
-            # adaptive k under constraint inactivity / large violation (CRN-based)
-            if (Aact_crn is None) or (torch.norm(viol_crn).item() > 5.0):
-                grad_avg_k = min(32, max(grad_avg_k, 16))
-            else:
-                grad_avg_k = max(8, min(grad_avg_k, 32))
-
-            # trust-region cap on eta for raw g direction
-            # applied after g is computed below
-
-            # now build averaged gradient with k independent noise draws (no CRN reuse here)
+            # gradient averaging with fresh perturbations and instance noise
             g_acc = torch.zeros_like(x)
             for _ in range(max(1, grad_avg_k)):
                 q = torch.randn(self.problem.dim, dtype=self.dtype, device=self.device)
@@ -177,45 +149,12 @@ class DSBLOOptII:
                 noise_up_s, noise_lo_s = self.problem._sample_instance_noise()
                 yhat = self.solve_ll_perturbed(xbar, q, noise_lo_s)
                 Aact, Bact = self.active(x, yhat)
-                # component-wise gradient to allow clipping of Jacobian term
-                gxf = self.gradx_f(xbar, yhat, noise_up_s)
-                # clip UL part as well to prevent oversized steps from UL alone
-                gxf_norm = torch.norm(gxf)
-                if gxf_norm > 100.0:
-                    gxf = gxf / gxf_norm * 100.0
-                jterm = self.grad_ystar(xbar, yhat, Aact, Bact, noise_lo_s).T @ self.grady_f(xbar, yhat, noise_lo_s)
-                # clip Jacobian contribution
-                jn = torch.norm(jterm)
-                if jn > 4.0:
-                    jterm = jterm / jn * 4.0
-                g_sample = gxf + jterm
+                g_sample = self.grad_F(xbar, yhat, Aact, Bact, noise_up_s, noise_lo_s)
                 g_acc += g_sample
             g = g_acc / max(1, grad_avg_k)
-            # debug: check numerical issues
-            if torch.isnan(g).any():
-                grad_nan_count += 1
-                if verbose:
-                    print("[warn] g has NaN; zeroing this step")
-                g = torch.zeros_like(g)
-            if torch.isinf(g).any():
-                grad_inf_count += 1
-                if verbose:
-                    print("[warn] g has Inf; clipping to grad_clip")
-                g = torch.nan_to_num(g, nan=0.0, posinf=grad_clip, neginf=-grad_clip)
             g_norm = torch.norm(g)
             if g_norm > grad_clip:
                 g = g / g_norm * grad_clip
-            # feasibility-aware push when |A|=0 (CRN-based)
-            if (Aact_crn is None) and (torch.norm(viol_crn).item() > 0):
-                lam = 1e-2 * min(1.0, torch.norm(viol_crn).item() / 10.0)
-                feas_push = torch.zeros_like(g)
-                for i in range(self.problem.num_constraints):
-                    if viol_crn[i] > 0:
-                        feas_push += (-self.problem.B[i])
-                g = g + lam * feas_push
-            # trust-region eta for raw g (do not overwrite eta_cap)
-            eta_tr = delta / (g_norm.item() + 1e-12)
-            # add only minimal extra noise; instance noise already present
             g = g + sigma * torch.randn_like(g)
 
             # momentum update
@@ -223,68 +162,32 @@ class DSBLOOptII:
             m = beta * m + (1.0 - beta) * g
             # clip momentum as well to stabilize
             m_norm = torch.norm(m)
-            if torch.isnan(m).any():
-                m_nan_count += 1
-                if verbose:
-                    print("[warn] m has NaN; resetting to g")
-                m = g.clone()
-                m_norm = torch.norm(m)
-            if torch.isinf(m).any():
-                m_inf_count += 1
-                if verbose:
-                    print("[warn] m has Inf; clipping to grad_clip")
-                m = torch.nan_to_num(m, nan=0.0, posinf=grad_clip, neginf=-grad_clip)
-                m_norm = torch.norm(m)
             if m_norm > grad_clip:
                 m = m / m_norm * grad_clip
 
-            # stochastic Armijo backtracking on raw g using CRN for probe
-            # Use CRN-evaluated LL solution for probes/diagnostics
-            F_x = self.problem.upper_objective(x, yhat_crn, crn_up).item()
-            c1 = 1e-4
-            # backtracking step size includes trust-region clamp but keeps baseline eta_cap
-            back_eta = min(1.0 / (gamma1 * max(g_norm.item(), 1e-12) + gamma2), eta_cap, eta_tr)
-            ok = False
-            for _ in range(8):
-                x_try = x - back_eta * g
-                # evaluate with CRN-consistent LL using the same q_crn and crn_lo
-                yhat_try_crn = self.solve_ll_perturbed(x_try, q_crn, crn_lo)
-                F_try = self.problem.upper_objective(x_try, yhat_try_crn, crn_up).item()
-                if F_try <= F_x - c1 * back_eta * (g_norm.item() ** 2):
-                    ok = True
-                    break
-                back_eta *= 0.5
-            if not ok:
-                # reset momentum and shrink eta_cap slowly to allow recovery
-                m = g.clone()
-                eta_cap = max(1e-6, eta_cap * 0.9)
-                consec_increase += 1
-            else:
-                consec_increase = 0
-
             if verbose and (t % max(1, log_every) == 0):
-                # UL at current x with CRN noise for stable print
-                # current UL with CRN
-                F_x = self.problem.upper_objective(x, yhat_crn, crn_up).item()
+                # UL at current x with true y*
+                y_star_dbg, _ = self.problem.solve_lower_level(x)
+                F_x = self.problem.upper_objective(x, y_star_dbg).item()
                 # Descent probe using immediate grad (no momentum)
                 eta_raw_dbg = 1.0 / (gamma1 * max(g_norm.item(), 1e-12) + gamma2)
-                eta_dbg = min(eta_raw_dbg, eta_cap, eta_tr)
+                eta_dbg = min(eta_raw_dbg, eta_cap)
                 x_probe = x - eta_dbg * g
-                yhat_probe_crn = self.solve_ll_perturbed(x_probe, q_crn, crn_lo)
-                F_probe = self.problem.upper_objective(x_probe, yhat_probe_crn, crn_up).item()
+                y_star_probe, _ = self.problem.solve_lower_level(x_probe)
+                F_probe = self.problem.upper_objective(x_probe, y_star_probe).item()
 
-                # diagnostics at x with CRN
-                gxf = self.gradx_f(x, yhat_crn, crn_up)
-                jy = self.grad_ystar(x, yhat_crn, Aact_crn, Bact_crn, crn_lo).T @ self.grady_f(x, yhat_crn, crn_lo)
-                # LL diagnostics using CRN
-                h_yhat = self.problem.constraints(x, yhat_crn)
+                # decomposition terms at (xbar, yhat)
+                gxf = self.gradx_f(xbar, yhat, noise_up_s)
+                jy = self.grad_ystar(xbar, yhat, Aact, Bact, noise_lo_s).T @ self.grady_f(xbar, yhat, noise_lo_s)
+                # LL diagnostics
+                h_yhat = self.problem.constraints(xbar, yhat)
                 viol_yhat = torch.clamp(h_yhat, min=0)
-                H = self.hessyy_g(x, yhat_crn, crn_lo)
+                H = self.hessyy_g(xbar, yhat, noise_lo_s)
                 cond_val = float('nan')
                 min_sv = float('nan')
-                if Aact_crn is not None:
+                if Aact is not None:
                     try:
-                        Minv = torch.linalg.inv(Aact_crn @ torch.linalg.inv(H) @ Aact_crn.T)
+                        Minv = torch.linalg.inv(Aact @ torch.linalg.inv(H) @ Aact.T)
                         s = torch.linalg.svdvals(Minv)
                         if s.numel() > 0:
                             min_sv = float(s.min().item())
@@ -295,16 +198,17 @@ class DSBLOOptII:
 
                 print(f"[t={t}] F(x)={F_x:.6f} F(x-eta*g)={F_probe:.6f} eta={eta_dbg:.3e} eta_cap={eta_cap:.3e}"
                       f" ||g||pre={g_norm:.6f} ||m||pre={torch.norm(m_before).item():.6f} ||m||post={m_norm:.6f}")
-                print(f"  |A|={(0 if Aact_crn is None else Aact_crn.size(0))} cond(AH^-1A^T)={cond_val} min_sv={min_sv}")
+                print(f"  |A|={(0 if Aact is None else Aact.size(0))} cond(AH^-1A^T)={cond_val} min_sv={min_sv}")
                 print(f"  ||gradx_f||={torch.norm(gxf).item():.6f} ||J^T grady_f||={torch.norm(jy).item():.6f}"
                       f" <gradx_f, J^T grady_f>={torch.dot(gxf.view(-1), jy.view(-1)).item():.6f}")
                 print(f"  yhat viol max={viol_yhat.max().item():.3e} ||viol||={torch.norm(viol_yhat).item():.3e}"
                       f" ||noise_up||_F={torch.norm(noise_up_s).item():.3e} ||noise_lo||_F={torch.norm(noise_lo_s).item():.3e}"
                       f" sigma={sigma:.2e} k={grad_avg_k}")
 
-            # tracking
-            # tracking with CRN noise for stability
-            ul_losses.append(self.problem.upper_objective(x, yhat_crn, crn_up).item())
+            # tracking UL loss at current point x with fresh instance noise (raw noise)
+            noise_up_track, _ = self.problem._sample_instance_noise()
+            y_star, _ = self.problem.solve_lower_level(x)
+            ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
             hypergrad_norms.append(torch.norm(m).item())
             x_history.append(x.clone().detach())
 
@@ -322,16 +226,6 @@ class DSBLOOptII:
                             eta_cap = new_cap
                         since_best = 0
 
-            # adapt trust-region radius based on UL improvement
-            if len(ul_losses) >= 2 and ul_losses[-1] > ul_losses[-2] + 1e-8:
-                delta = max(1e-4, delta * 0.7)
-            elif len(ul_losses) >= 2 and ul_losses[-1] < ul_losses[-2] - 1e-8:
-                delta = min(1e-1, delta * 1.05)
-            # momentum reset on repeated ascent
-            if consec_increase >= 2:
-                m = g.clone()
-                consec_increase = 0
-
             if t % 100 == 0:
                 print(f"Iteration {t}/{T}: ||m|| = {hypergrad_norms[-1]:.6f}, UL = {ul_losses[-1]:.6f}")
 
@@ -348,12 +242,6 @@ class DSBLOOptII:
             'x_history': x_history,
             'iterations': T,
             'converged': torch.norm(m).item() < 1e-3,
-            'debug_metrics': {
-                'grad_nan_count': grad_nan_count,
-                'grad_inf_count': grad_inf_count,
-                'm_nan_count': m_nan_count,
-                'm_inf_count': m_inf_count,
-            }
         }
 
 
@@ -364,7 +252,6 @@ def main():
     parser.add_argument('--dim', type=int, default=5)
     parser.add_argument('--constraints', type=int, default=3)
     parser.add_argument('--sigma', type=float, default=1e-2)
-    parser.add_argument('--problem-noise-std', type=float, default=None, help='Instance noise std for problem (overrides default)')
     parser.add_argument('--grad-clip', type=float, default=5.0)
     parser.add_argument('--eta-cap', type=float, default=1e-5)
     parser.add_argument('--noise-decay', type=float, default=0.995)
@@ -379,10 +266,7 @@ def main():
     parser.add_argument('--log-every', type=int, default=50)
     args = parser.parse_args()
 
-    if args.problem_noise_std is not None:
-        problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints, noise_std=args.problem_noise_std)
-    else:
-        problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints)
+    problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints)
     x0 = torch.randn(args.dim, dtype=torch.float64)
     algo = DSBLOOptII(problem)
     res = algo.optimize(
