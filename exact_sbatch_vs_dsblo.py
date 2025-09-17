@@ -272,7 +272,9 @@ def run_exact_sbatch_vs_dsblo():
                 means.append(np.mean(vals))
                 stds.append(np.std(vals))
             return np.array(means), np.array(stds)
-        m_f2, s_f2 = mc_ul(f2csa_results['x_history'])
+        m_f2, s_f2 = (None, None)
+        if f2csa_results is not None:
+            m_f2, s_f2 = mc_ul(f2csa_results['x_history'])
         m_ds, s_ds = mc_ul(dsblo_results['x_history'])
 
     # Optional raw noisy overlay: single fresh noise sample per iter (trajectory-like)
@@ -301,10 +303,11 @@ def run_exact_sbatch_vs_dsblo():
     if args.ul_scale == 'symlog':
         ax1.set_yscale('symlog', linthresh=1.0)
     if args.ul_overlay_noisy:
-        it_f2 = np.arange(len(m_f2))
+        if m_f2 is not None and s_f2 is not None:
+            it_f2 = np.arange(len(m_f2))
+            ax1.plot(it_f2, m_f2, color='C0', alpha=0.6, linestyle='--', label='F2CSA (noisy mean)')
+            ax1.fill_between(it_f2, m_f2 - s_f2, m_f2 + s_f2, color='C0', alpha=0.15)
         it_ds = np.arange(len(m_ds))
-        ax1.plot(it_f2, m_f2, color='C0', alpha=0.6, linestyle='--', label='F2CSA (noisy mean)')
-        ax1.fill_between(it_f2, m_f2 - s_f2, m_f2 + s_f2, color='C0', alpha=0.15)
         ax1.plot(it_ds, m_ds, color='C1', alpha=0.6, linestyle='--', label='DS-BLO (noisy mean)')
         ax1.fill_between(it_ds, m_ds - s_ds, m_ds + s_ds, color='C1', alpha=0.15)
     if args.ul_overlay_noisy_raw:
