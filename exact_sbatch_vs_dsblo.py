@@ -244,7 +244,7 @@ def run_exact_sbatch_vs_dsblo():
         print("RUNNING SSIGD")
         print("=" * 50)
         ssigd_algo = CorrectSSIGD(problem)
-        x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd, x_history_ssigd = ssigd_algo.solve(T=args.T, beta=args.eta, x0=x0)
+        x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd = ssigd_algo.solve(T=args.T, beta=args.eta, x0=x0)
         ssigd_results = {
             'final_ul_loss': ul_losses_ssigd[-1],
             'final_gradient_norm': hypergrad_norms_ssigd[-1],
@@ -252,7 +252,7 @@ def run_exact_sbatch_vs_dsblo():
             'iterations': args.T,
             'ul_losses': ul_losses_ssigd,
             'hypergrad_norms': hypergrad_norms_ssigd,
-            'x_history': x_history_ssigd  # Now SSIGD returns actual x_history
+            'x_history': [x_ssigd] * args.T  # SSIGD only returns final x, so replicate for history
         }
         print()
         print("SSIGD Results:")
