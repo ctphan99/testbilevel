@@ -18,7 +18,7 @@
 # Create logs directory
 mkdir -p logs
 
-# Environment setup
+# Environment from library source (prefer venv under python_packages if present)
 VENV_DIR=/storage/scratch1/6/cphan36/python_packages
 if [ -f "$VENV_DIR/bin/activate" ]; then
     source "$VENV_DIR/bin/activate"
@@ -28,12 +28,13 @@ else
     export PYTHONPATH=/storage/scratch1/6/cphan36/python_packages/lib/python3.10/site-packages:$PYTHONPATH
 fi
 
-# Workdir: cd to the submission directory
+# Workdir: cd to the submission directory (where you ran sbatch)
 WORK_DIR=${SLURM_SUBMIT_DIR:-$(pwd)}
 cd "$WORK_DIR"
 
-# Ensure Python can find packages
+# Ensure Python can find site packages and sibling legacy repo
 export PYTHONPATH=/storage/scratch1/6/cphan36/python_packages/lib/python3.10/site-packages:$PYTHONPATH
+export PYTHONPATH=$(cd "$WORK_DIR/.." && pwd)/BilevelLinearConstraints:$PYTHONPATH
 
 # GPU configuration
 export CUDA_VISIBLE_DEVICES=0
