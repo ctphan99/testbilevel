@@ -131,9 +131,9 @@ class F2CSAAlgorithm2Working:
             # Step 4: Update x_t = x_{t-1} + Δ_t (following Algorithm 2)
             x = x + Delta
             
-            # Compute upper-level loss for monitoring at x (not z_t)
-            y_opt_x, _ = self.problem.solve_lower_level(x)
-            ul_loss_t = self.problem.upper_objective(x, y_opt_x).item()
+            # Compute upper-level loss for monitoring at x_t (after update)
+            y_star, _ = self.problem.solve_lower_level(x)
+            ul_loss_t = self.problem.upper_objective(x, y_star).item()
             ul_losses.append(ul_loss_t)
             
             # Store history
