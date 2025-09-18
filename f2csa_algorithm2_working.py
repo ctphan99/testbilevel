@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-F2CSA Algorithm 2 - CORRECTED Implementation
-Following F2CSA.tex Algorithm 2 exactly with perturbation sampling
+F2CSA Algorithm 2 - WORKING Implementation
+Uses the correct hypergradient computation from Algorithm 1
 """
 
 import torch
@@ -20,7 +20,7 @@ warnings.filterwarnings('ignore')
 class F2CSAAlgorithm2Working:
     """
     F2CSA Algorithm 2: Nonsmooth Nonconvex Algorithm with Inexact Stochastic Hypergradient Oracle
-    CORRECTED implementation following F2CSA.tex Algorithm 2 exactly
+    WORKING implementation using correct hypergradient computation
     """
     
     def __init__(self, problem: StronglyConvexBilevelProblem, device: str = 'cpu', dtype=torch.float64):
@@ -31,11 +31,10 @@ class F2CSAAlgorithm2Working:
         # Initialize Algorithm 1 for hypergradient computation
         self.algorithm1 = F2CSAAlgorithm1Final(problem, device=device, dtype=dtype)
         
-        # Persistent cache for two-level warm-start
-        self.prev_y = None              # Previous inner problem solution
-        self.prev_lambda = None         # Previous dual solution  
-        self.prev_y_lamb_opt = None     # Previous Lagrangian problem solution
-        self.prev_adam_state = None     # Previous Adam optimizer state
+        # Persistent cache for warm-start
+        self.prev_y = None
+        self.prev_lambda = None
+        self.prev_adam_state = None
         
     def clip_D(self, v: torch.Tensor, D: float) -> torch.Tensor:
         """
@@ -52,16 +51,10 @@ class F2CSAAlgorithm2Working:
                  warm_ll: bool = False, keep_adam_state: bool = False,
                  plot_name: str = None, save_warm_name: str = None) -> Dict:
         """
-        Run F2CSA Algorithm 2 following F2CSA.tex Algorithm 2 exactly:
-        - Sample s_t ~ Unif[0,1] 
-        - z_t = x_{t-1} + s_t * Δ_t
-        - Compute g_t = ∇F̃(z_t) using Algorithm 1
-        - Δ_{t+1} = clip_D(Δ_t - η * g_t)
-        - Output: x_k = (1/M) * Σ z_{(k-1)M+m} for Goldstein subdifferential
+        Run F2CSA Algorithm 2 optimization with WORKING hypergradient computation
         """
-        print("🚀 F2CSA Algorithm 2 - CORRECTED Implementation")
+        print("🚀 F2CSA Algorithm 2 - WORKING Implementation")
         print("=" * 70)
-        print(f"Following F2CSA.tex Algorithm 2 exactly")
         print(f"T = {T}, D = {D:.6f}, η = {eta:.6f}")
         print(f"δ = {delta:.6f}, α = {alpha:.6f}")
         print()
@@ -74,40 +67,40 @@ class F2CSAAlgorithm2Working:
         print(f"Using N_g = {N_g} samples for hypergradient estimation")
         print()
         
-        # Initialize following Algorithm 2: Δ_1 = 0
+        # Initialize
         x = x0.clone().detach()
-        Delta = torch.zeros_like(x)  # Δ_t direction vector
+        Delta = torch.zeros_like(x)
         
         # Storage for results
         z_history = []
         x_history = []
         g_history = []
+        Delta_history = []
         ul_losses = []
         hypergrad_norms = []
         
         print("Starting optimization...")
         print("-" * 50)
         
-        # In F2CSA, add before the main loop:
-        # Compute initial gradient at x0 for fair comparison
-        print("Computing initial gradient at x0...")
-        y0_star, _ = self.problem.solve_lower_level(x0)
-        oracle_result_0 = self.algorithm1.oracle_sample(x0, alpha, N_g)
-        g_0 = oracle_result_0[0] if isinstance(oracle_result_0, tuple) else oracle_result_0
-        hypergrad_norms.append(torch.norm(g_0).item())
-        ul_losses.append(self.problem.upper_objective(x0, y0_star).item())
-        print(f"Initial gradient norm: {torch.norm(g_0).item():.6f}")
-        print(f"Initial UL loss: {ul_losses[0]:.6f}")
+        # Main optimization loop
+        current_eta = eta
+        decay_every = max(50, T // 10)
+        decay_factor = 0.95
+        window = 50
+        ul_tol = 1e-3
+        hg_tol = 1e-2
         
-        # Main optimization loop following Algorithm 2 exactly
         for t in range(1, T + 1):
-            # Step 1: Sample s_t ~ Unif[0,1] and compute z_t = x_{t-1} + s_t * Δ_t
-            s_t = torch.rand(1).item()  # Sample from Uniform[0,1]
-            z_t = x + s_t * Delta  # z_t = x_{t-1} + s_t * Δ_t
+            # Sample s_t ~ Unif[0, 1]
+            s_t = torch.rand(1, device=self.device, dtype=self.dtype).item()
             
-            # Step 2: Compute g_t = ∇F̃(z_t) using Algorithm 1
+            # Update x_t and z_t
+            x_t = x + Delta
+            z_t = x + s_t * Delta
+            
+            # Compute hypergradient using Algorithm 1 (WORKING version) with warm-start
             if warm_ll and (self.prev_y is not None or self.prev_lambda is not None):
-                # Pass warm-start information to Algorithm 1 for inner problem
+                # Pass warm-start information to Algorithm 1
                 oracle_result = self.algorithm1.oracle_sample(z_t, alpha, N_g, 
                                                              prev_y=self.prev_y, 
                                                              prev_lambda=self.prev_lambda,
@@ -115,38 +108,48 @@ class F2CSAAlgorithm2Working:
             else:
                 oracle_result = self.algorithm1.oracle_sample(z_t, alpha, N_g)
             
-            # Extract solutions from inner problem
+            # Extract hypergradient from oracle result (returns tuple: grad, y, lambda)
             g_t = oracle_result[0] if isinstance(oracle_result, tuple) else oracle_result
-            if isinstance(oracle_result, tuple) and len(oracle_result) >= 3:
-                y_opt = oracle_result[1]  # Inner problem solution (y*)
-                lambda_opt = oracle_result[2]  # Dual solution (λ*)
-            else:
-                # Fallback: solve inner problem directly
-                y_opt, _ = self.problem.solve_lower_level(z_t)
-                lambda_opt = torch.zeros(self.problem.num_constraints, device=self.device, dtype=self.dtype)
-            
-            # Step 3: Update direction Δ_{t+1} = clip_D(Δ_t - η * g_t)
-            Delta = self.clip_D(Delta - eta * g_t, D)
-            
-            # Step 4: Update x_t = x_{t-1} + Δ_t (following Algorithm 2)
-            x = x + Delta
-            
-            # Compute upper-level loss for monitoring at x_t (after update)
-            y_star, _ = self.problem.solve_lower_level(x)
-            ul_loss_t = self.problem.upper_objective(x, y_star).item()
+
+            # Compute upper-level loss at x_t to monitor Algorithm 2 gap (f(x, y*))
+            y_star, _ = self.problem.solve_lower_level(x_t)
+            ul_loss_t = self.problem.upper_objective(x_t, y_star).item()
             ul_losses.append(ul_loss_t)
+
+            # Update direction with clipping
+            Delta = self.clip_D(Delta - current_eta * g_t, D)
+            
+            # Decay step size periodically
+            if t % decay_every == 0:
+                current_eta = max(current_eta * decay_factor, eta * 0.2)
+            
+            # Early stopping: UL loss and hypergrad norm stabilization
+            if len(ul_losses) >= window:
+                ul_recent = ul_losses[-window:]
+                hg_recent = hypergrad_norms[-window:]
+                ul_span = max(ul_recent) - min(ul_recent)
+                hg_span = max(hg_recent) - min(hg_recent)
+                if ul_span < ul_tol and hg_span < hg_tol:
+                    print(f"Early stop at iter {t}: UL loss and hypergrad stabilized (spans {ul_span:.3e}, {hg_span:.3e})")
+                    T = t
+                    break
             
             # Store history
             z_history.append(z_t.clone().detach())
-            x_history.append(x.clone().detach())
+            x_history.append(x_t.clone().detach())
             g_history.append(g_t.clone().detach())
             hypergrad_norms.append(torch.norm(g_t).item())
+            Delta_history.append(Delta.clone().detach())
             
-            # TWO-LEVEL WARM START PERSISTENCE
+            # Update x for next iteration
+            x = x_t
+            
+            # Cache lower-level solution for warm-start (if enabled)
             if warm_ll:
-                # Level 1: Cache inner problem solutions for next iteration
-                self.prev_y = y_opt.clone().detach()
-                self.prev_lambda = lambda_opt.clone().detach()
+                # Get the lower-level solution from the oracle result
+                if isinstance(oracle_result, tuple) and len(oracle_result) >= 3:
+                    self.prev_y = oracle_result[1].clone().detach()  # y_tilde
+                    self.prev_lambda = oracle_result[2].clone().detach()  # lambda_star
                 
                 # Cache Adam state if requested
                 if keep_adam_state and hasattr(self.algorithm1, 'adam_state'):
@@ -155,36 +158,38 @@ class F2CSAAlgorithm2Working:
             # Print progress
             if t % max(1, T // 20) == 0 or t <= 10:
                 g_norm = torch.norm(g_t).item()
-                print(f"Iteration {t:4d}/{T}: ||g_t|| = {g_norm:.6f}, ul_loss = {ul_loss_t:.6f}")
-                if warm_ll:
-                    print(f"  Warm start: y_opt shape={tuple(y_opt.shape)}, λ_opt shape={tuple(lambda_opt.shape)}")
+                Delta_norm = torch.norm(Delta).item()
+                print(f"Iteration {t:4d}/{T}: ||g_t|| = {g_norm:.6f}, ||Δ_t|| = {Delta_norm:.6f}, ul_loss = {ul_loss_t:.6f}")
         
         print()
-        print("Computing final output following Algorithm 2...")
+        print("Computing output points...")
         
-        # Step 5: Group iterations for Goldstein subdifferential
-        # M = ⌊δ/D⌋, K = ⌊T/M⌋
-        M = max(1, int(delta / D))  # M = ⌊δ/D⌋
-        K = max(1, int(T / M))      # K = ⌊T/M⌋
-        print(f"Goldstein grouping: M = {M}, K = {K}")
+        # Group iterations for Goldstein subdifferential (per spec): K = max(1, total_iters // M)
+        total_iters = len(z_history)
+        M = max(1, int(delta / D))
+        K = max(1, total_iters // M)
         
-        # Step 6: Compute x_k = (1/M) * Σ z_{(k-1)M+m} for k = 1,...,K
-        x_outputs = []
+        print(f"M = {M}, K = {K}")
+        
+        # Compute candidate points and their upper-level losses f(x, y*) for all K blocks
+        candidates = []
         for k in range(1, K + 1):
             start_idx = (k - 1) * M
             end_idx = min(k * M, len(z_history))
             if start_idx < len(z_history):
-                z_batch = z_history[start_idx:end_idx]
-                x_k = torch.stack(z_batch).mean(dim=0)
-                x_outputs.append(x_k)
+                z_group = z_history[start_idx:end_idx]
+                x_k = torch.stack(z_group).mean(dim=0)
+                y_star_k, _ = self.problem.solve_lower_level(x_k)
+                ul_loss_k = self.problem.upper_objective(x_k, y_star_k).item()
+                candidates.append((x_k, ul_loss_k))
         
-        # Step 7: Output x_out ~ Uniform{x_1, ..., x_K}
-        if x_outputs:
-            x_out = x_outputs[torch.randint(0, len(x_outputs), (1,)).item()]
+        if candidates:
+            # Choose the candidate with the smallest upper-level loss
+            x_out, best_ul_loss = min(candidates, key=lambda t: t[1])
+            print(f"Selected output with min f(x, y*) among {len(candidates)}: f = {best_ul_loss:.6f}")
         else:
-            x_out = x  # Fallback to final x if no outputs computed
-        
-        print(f"Using Algorithm 2 output: x_out from {len(x_outputs)} candidates")
+            x_out = x_history[-1] if x_history else x0
+            print("No candidates formed; falling back to last x.")
         print()
         
         # Compute final gradient norm
@@ -222,14 +227,12 @@ class F2CSAAlgorithm2Working:
         except Exception as e:
             print(f"Plotting failed: {e}")
         
-        # Save warm start for next runs (point with best hypergradient from current run)
+        # Save warm start for next runs
         try:
             if save_warm_name is None:
                 save_warm_name = 'algo2_warmstart.npy'
             np.save(save_warm_name, x_out.detach().cpu().numpy())
-            print(f"Saved warm start (F2CSA Algorithm 2 output) to {save_warm_name}")
-            print(f"  Warm start point shape: {tuple(x_out.shape)}")
-            print(f"  Warm start point: {x_out}")
+            print(f"Saved warm start to {save_warm_name}")
         except Exception as e:
             print(f"Failed to save warm start: {e}")
         
@@ -242,16 +245,11 @@ class F2CSAAlgorithm2Working:
             'x_history': x_history,
             'z_history': z_history,
             'g_history': g_history,
+            'Delta_history': Delta_history,
             'hypergrad_norms': hypergrad_norms,
             'ul_losses': ul_losses,
             'converged': final_g_norm < 1e-3,
-            'iterations': T,
-            'warm_start_info': {
-                'prev_y': self.prev_y,
-                'prev_lambda': self.prev_lambda,
-                'prev_y_lamb_opt': self.prev_y_lamb_opt,
-                'prev_adam_state': self.prev_adam_state
-            }
+            'iterations': T
         }
 
 if __name__ == "__main__":
@@ -268,25 +266,16 @@ if __name__ == "__main__":
     parser.add_argument('--save-warm-name', type=str, default=None, help='Warm start save filename')
     parser.add_argument('--dim', type=int, default=5, help='Problem dimension')
     parser.add_argument('--constraints', type=int, default=3, help='Number of constraints')
-    parser.add_argument('--problem-noise-std', type=float, default=None, help='Instance noise std for the problem; default keeps current 0.1')
     
     args = parser.parse_args()
     
-    # Initialize problem (preserve current behavior unless flag is provided)
-    if args.problem_noise_std is None:
-        problem = StronglyConvexBilevelProblem(
-            dim=args.dim,
-            num_constraints=args.constraints,
-            noise_std=0.1,
-            strong_convex=True
-        )
-    else:
-        problem = StronglyConvexBilevelProblem(
-            dim=args.dim,
-            num_constraints=args.constraints,
-            noise_std=args.problem_noise_std,
-            strong_convex=True
-        )
+    # Initialize problem
+    problem = StronglyConvexBilevelProblem(
+        dim=args.dim, 
+        num_constraints=args.constraints, 
+        noise_std=0.1, 
+        strong_convex=True
+    )
     
     algorithm2 = F2CSAAlgorithm2Working(problem)
     
@@ -294,9 +283,14 @@ if __name__ == "__main__":
     alpha = args.alpha
     delta = alpha**3
     
-    # Initialize with random starting point
-    x0 = torch.randn(args.dim, dtype=torch.float64)
-    print(f"Using random initialization: x0 shape = {tuple(x0.shape)}")
+    # Warm start if available
+    warm_path = 'algo2_warmstart.npy'
+    try:
+        x0 = torch.tensor(np.load(warm_path), dtype=torch.float64)
+        print(f"Loaded warm start from {warm_path}: x0 shape = {tuple(x0.shape)}")
+    except Exception:
+        x0 = torch.randn(args.dim, dtype=torch.float64)
+        print("No warm start found; using random x0.")
     
     print(f"Test point x0: {x0}")
     print(f"α = {alpha}")

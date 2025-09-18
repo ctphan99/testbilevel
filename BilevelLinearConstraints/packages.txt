@@ -1,0 +1,4 @@
+conda create -n blo python=3.9.0
+pip install cvxopt
+pip install matplotlib 
+pip install optuna

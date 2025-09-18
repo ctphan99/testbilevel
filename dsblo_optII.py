@@ -138,10 +138,11 @@ class DSBLOOptII:
                         if B_norm_sq > 1e-10:
                             correction += violations[i] * self.problem.B[i] / B_norm_sq
                 y = y - correction
-            ul_losses.append(self.problem.upper_objective(x, y).item())
+            ul_losses.append(self.problem.upper_objective(x, y, noise_up_track).item())
         else:
+            noise_up_track, _ = self.problem._sample_instance_noise()
             y_star, _ = self.problem.solve_lower_level(x)
-            ul_losses.append(self.problem.upper_objective(x, y_star).item())
+            ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
         hypergrad_norms.append(torch.norm(m).item())
 
         best_ul = float('inf')
