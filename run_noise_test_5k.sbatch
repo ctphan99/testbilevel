@@ -62,7 +62,7 @@ if [[ $? -ne 0 ]]; then
 fi
 
 # Run the specific test command
-srun -n 1 python exact_sbatch_vs_dsblo.py \
+python exact_sbatch_vs_dsblo.py \
   --T 5000 \
   --alpha 0.05 \
   --D 0.02 \
