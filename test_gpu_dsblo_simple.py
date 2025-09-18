@@ -17,27 +17,39 @@ def test_gpu_availability():
     """Test GPU availability and configuration"""
     logger.info("Testing GPU availability...")
     
-    if not torch.cuda.is_available():
-        logger.error("CUDA not available!")
-        return False
-    
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
-    logger.info(f"CUDA device count: {torch.cuda.device_count()}")
-    logger.info(f"Current device: {torch.cuda.current_device()}")
-    logger.info(f"Device name: {torch.cuda.get_device_name()}")
-    logger.info(f"CUDA version: {torch.version.cuda}")
     logger.info(f"PyTorch version: {torch.__version__}")
     
-    # Test basic GPU operations
-    try:
-        x = torch.randn(100, 100).cuda()
-        y = torch.randn(100, 100).cuda()
-        z = torch.mm(x, y)
-        logger.info(f"GPU tensor operations working: {z.shape}")
-        return True
-    except Exception as e:
-        logger.error(f"GPU operations failed: {e}")
-        return False
+    if not torch.cuda.is_available():
+        logger.warning("CUDA not available - testing CPU functionality instead")
+        logger.info("This is expected on login nodes or when GPU resources are not allocated")
+        
+        # Test basic CPU operations
+        try:
+            x = torch.randn(100, 100)
+            y = torch.randn(100, 100)
+            z = torch.mm(x, y)
+            logger.info(f"CPU tensor operations working: {z.shape}")
+            return True
+        except Exception as e:
+            logger.error(f"CPU operations failed: {e}")
+            return False
+    else:
+        logger.info(f"CUDA device count: {torch.cuda.device_count()}")
+        logger.info(f"Current device: {torch.cuda.current_device()}")
+        logger.info(f"Device name: {torch.cuda.get_device_name()}")
+        logger.info(f"CUDA version: {torch.version.cuda}")
+        
+        # Test basic GPU operations
+        try:
+            x = torch.randn(100, 100).cuda()
+            y = torch.randn(100, 100).cuda()
+            z = torch.mm(x, y)
+            logger.info(f"GPU tensor operations working: {z.shape}")
+            return True
+        except Exception as e:
+            logger.error(f"GPU operations failed: {e}")
+            return False
 
 def test_basic_dsblo_components():
     """Test basic DS-BLO components without full implementation"""
@@ -79,12 +91,14 @@ def test_basic_dsblo_components():
         grad_norm = torch.norm(perturbed_inputs.grad)
         logger.info(f"Gradient computation successful: norm={grad_norm.item():.4f}")
         
-        # Test GPU memory usage
+        # Test memory usage
         if device == 'cuda':
             memory_allocated = torch.cuda.memory_allocated() / 1024**2  # MB
             memory_reserved = torch.cuda.memory_reserved() / 1024**2   # MB
             logger.info(f"GPU memory allocated: {memory_allocated:.2f} MB")
             logger.info(f"GPU memory reserved: {memory_reserved:.2f} MB")
+        else:
+            logger.info("CPU mode - no GPU memory to report")
         
         logger.info("Basic DS-BLO components test passed!")
         return True
@@ -116,11 +130,11 @@ def test_torchvision_import():
 
 def main():
     """Run all GPU tests"""
-    logger.info("Starting simple DS-BLO GPU tests...")
+    logger.info("Starting simple DS-BLO tests...")
     
-    # Test 1: GPU availability
+    # Test 1: GPU/CPU availability
     if not test_gpu_availability():
-        logger.error("GPU not available, skipping GPU tests")
+        logger.error("PyTorch functionality test failed")
         return False
     
     # Test 2: Basic DS-BLO components
@@ -133,8 +147,9 @@ def main():
     if not torchvision_ok:
         logger.warning("Torchvision import failed, but basic functionality should work")
     
-    logger.info("Simple GPU tests completed! 🚀")
-    logger.info("Basic DS-BLO functionality verified on GPU")
+    device_type = "GPU" if torch.cuda.is_available() else "CPU"
+    logger.info(f"Simple tests completed! 🚀")
+    logger.info(f"Basic DS-BLO functionality verified on {device_type}")
     
     return True
 
