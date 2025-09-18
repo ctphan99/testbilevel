@@ -46,7 +46,7 @@ echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits)"
 
 # Run GPU test
 echo "Running DS-BLO GPU test..."
-srun -n 1 python test_gpu_dsblo.py
+srun -n 1 --account=gts-kwang692 python test_gpu_dsblo.py
 
 # Check if test passed
 if [[ $? -eq 0 ]]; then

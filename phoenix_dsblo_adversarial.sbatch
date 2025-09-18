@@ -54,15 +54,32 @@ DATASET=${DATASET_LIST[$DATASET_IDX]}
 EPSILON=${EPSILON_LIST[$EPSILON_IDX]}
 EPOCHS=${EPOCHS_LIST[$EPOCHS_IDX]}
 
-# Convert epsilon to decimal for filename
-EPSILON_DEC=$(echo "scale=6; $EPSILON" | bc -l)
-EPSILON_STR=$(echo $EPSILON_DEC | sed 's/\.//g' | cut -c1-4)
+# Convert epsilon to decimal for filename (handle both 8/255 and 16/255)
+if [[ "$EPSILON" == "8/255" ]]; then
+    EPSILON_STR="0314"  # 8/255 ≈ 0.0314
+elif [[ "$EPSILON" == "16/255" ]]; then
+    EPSILON_STR="0627"  # 16/255 ≈ 0.0627
+else
+    # Fallback: try bc if available, otherwise use a default
+    if command -v bc &> /dev/null; then
+        EPSILON_DEC=$(echo "scale=6; $EPSILON" | bc -l)
+        EPSILON_STR=$(echo $EPSILON_DEC | sed 's/\.//g' | cut -c1-4)
+    else
+        EPSILON_STR="0314"  # Default fallback
+    fi
+fi
 
 # Echo task configuration
 echo "Array task $SLURM_ARRAY_TASK_ID: dataset=$DATASET, epsilon=$EPSILON, epochs=$EPOCHS"
 echo "WORK_DIR=$WORK_DIR"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
-echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits)"
+
+# Check for GPU info (nvidia-smi might not be available in all environments)
+if command -v nvidia-smi &> /dev/null; then
+    echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits)"
+else
+    echo "GPU: nvidia-smi not available, using CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+fi
 
 # Preflight: verify DS-BLO implementation is importable
 python - <<'PY'
@@ -101,7 +118,7 @@ RESULTS_DIR="dsblo_results_${DATASET}_eps${EPSILON_STR}_epochs${EPOCHS}"
 mkdir -p "$RESULTS_DIR"
 
 # Run the training
-srun -n 1 python dsblo_adversarial_training.py \
+srun -n 1 --account=gts-kwang692 python dsblo_adversarial_training.py \
   --dataset "$DATASET" \
   --epsilon "$EPSILON" \
   --epochs "$EPOCHS" \
