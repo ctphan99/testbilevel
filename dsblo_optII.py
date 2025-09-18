@@ -56,8 +56,17 @@ class DSBLOOptII:
         return self.problem.P @ y + self.problem.P.T @ x
 
     def grad_lambdastar(self, x: torch.Tensor, y: torch.Tensor, Aact: torch.Tensor, Bact: torch.Tensor, noise_lower: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # Robust solve for λ* gradient with regularization/pinv fallback
         hessyy_inv = torch.linalg.inv(self.hessyy_g(x, y, noise_lower))
-        return -torch.linalg.inv(Aact @ hessyy_inv @ Aact.T) @ (Aact @ hessyy_inv @ self.hessxy_g(x, y) - Bact)
+        M = Aact @ hessyy_inv @ Aact.T
+        rhs = Aact @ hessyy_inv @ self.hessxy_g(x, y) - Bact
+        eps = 1e-6
+        try:
+            M_reg = M + eps * torch.eye(M.shape[0], dtype=M.dtype, device=M.device)
+            sol = torch.linalg.solve(M_reg, rhs)
+        except Exception:
+            sol = torch.linalg.pinv(M) @ rhs
+        return -sol
 
     def grad_ystar(self, x: torch.Tensor, y: torch.Tensor, Aact: Optional[torch.Tensor], Bact: Optional[torch.Tensor], noise_lower: Optional[torch.Tensor] = None) -> torch.Tensor:
         if Aact is None:
@@ -108,7 +117,8 @@ class DSBLOOptII:
 
         x = x0.clone().detach()
         ul_losses = []
-        hypergrad_norms = []
+        hypergrad_norms = []  # ||m_t|| (EMA momentum norm)
+        hypergrad_norms_raw = []  # ||g_t|| (instantaneous gradient norm before momentum)
         x_history = []
 
         # q1 ~ Q (LL perturbation)
@@ -249,6 +259,8 @@ class DSBLOOptII:
                 noise_up_track, _ = self.problem._sample_instance_noise()
                 y_star, _ = self.problem.solve_lower_level(x)
                 ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
+            # log both raw and momentum norms
+            hypergrad_norms_raw.append(g_norm.item())
             hypergrad_norms.append(torch.norm(m).item())
             x_history.append(x.clone().detach())
 
@@ -267,7 +279,7 @@ class DSBLOOptII:
                         since_best = 0
 
             if t % 100 == 0:
-                print(f"Iteration {t}/{T}: ||m|| = {hypergrad_norms[-1]:.6f}, UL = {ul_losses[-1]:.6f}")
+                print(f"Iteration {t}/{T}: ||g|| = {hypergrad_norms_raw[-1]:.6f}, ||m|| = {hypergrad_norms[-1]:.6f}, UL = {ul_losses[-1]:.6f}")
 
             # decay noise
             sigma = max(noise_min, sigma * noise_decay)
@@ -279,6 +291,7 @@ class DSBLOOptII:
             'final_ul_loss': ul_losses[-1],
             'ul_losses': ul_losses,
             'hypergrad_norms': hypergrad_norms,
+            'hypergrad_norms_raw': hypergrad_norms_raw,
             'x_history': x_history,
             'iterations': T,
             'converged': torch.norm(m).item() < 1e-3,

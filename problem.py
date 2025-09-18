@@ -71,18 +71,19 @@ class StronglyConvexBilevelProblem:
         
         self.c_lower = torch.randn(self.dim, device=self.device, dtype=self.dtype) * param_scale
         
-        # Natural constraints: h(x,y) = Ax + By - b ≤ 0
-        # Generate random constraint matrices without artificial feasibility
-        constraint_scale = 0.5  # Normal scale for natural violations
-        self.A = torch.randn(self.num_constraints, self.dim, device=self.device, dtype=self.dtype) * constraint_scale
-        self.B = torch.randn(self.num_constraints, self.dim, device=self.device, dtype=self.dtype) * constraint_scale
-        self.b = torch.randn(self.num_constraints, device=self.device, dtype=self.dtype) * constraint_scale
+        # Override constraints to box: |y_i| ≤ 1 for all i
+        # Model as stacked inequalities: y ≤ 1 and -y ≤ 1 → [I; -I] y ≤ [1; 1]
+        self.num_constraints = 2 * self.dim
+        self.A = torch.zeros(self.num_constraints, self.dim, device=self.device, dtype=self.dtype)
+        I = torch.eye(self.dim, device=self.device, dtype=self.dtype)
+        self.B = torch.cat([I, -I], dim=0)
+        self.b = torch.ones(self.num_constraints, device=self.device, dtype=self.dtype)
         
         # Print problem information
         print(f"Natural Bilevel Problem (dim={self.dim}, constraints={self.num_constraints})")
         
-        # Check constraint violations at origin (natural behavior)
-        origin_violations = torch.clamp(-self.b, min=0)  # h(0,0) = -b
+        # Check box constraint at origin
+        origin_violations = torch.zeros_like(self.b)
         max_violation = torch.max(origin_violations)
         print(f"Constraint violations at origin: {max_violation:.6f}")
         

@@ -21,45 +21,32 @@ class CorrectSSIGD:
         self.dtype = problem.dtype
         
         # Single fixed perturbation for smoothing (as per SSIGD paper)
-        self.q = torch.randn(problem.dim, device=self.device, dtype=self.dtype) * 1e-4
+        # q ~ N(0, σ^2 I) with σ^2 = 4e-5 → σ ≈ 6.3249e-3
+        self.q = torch.randn(problem.dim, device=self.device, dtype=self.dtype) * (4e-5) ** 0.5
         
         print(f"SSIGD: Using single fixed q-perturbation for smoothing")
         print(f"  q shape: {self.q.shape}, q norm: {torch.norm(self.q).item():.2e}")
     
-    def solve_lower_level_with_perturbation(self, x, q_perturbation, max_iter=50):
+    def solve_lower_level_with_perturbation(self, x, q_perturbation, max_iter=10):
         """
-        Solve lower-level problem with q-perturbation and log-barrier constraints
-        Following algorithms.py approach exactly
+        Paper-style LL: 10 steps PGD, step-size 0.1, box projection |y|<=1; add q-perturbation.
         """
         x_det = x.detach()
         y = torch.zeros(self.prob.dim, device=self.device, dtype=self.dtype, requires_grad=True)
-        optimizer = torch.optim.Adam([y], lr=0.01)
-        
-        for iter_count in range(max_iter):
-            optimizer.zero_grad()
-            
-            # 1. Lower-level objective g(x,y) - following algorithms.py structure
+        step_size = 0.1
+        for _ in range(max_iter):
+            if y.grad is not None:
+                y.grad.zero_()
             obj = self.prob.lower_objective(x_det, y)
-            
-            # 2. Add q-perturbation for smoothing (CRITICAL for SSIGD)
             if q_perturbation is not None:
                 obj = obj + torch.sum(q_perturbation * y)
-            
-            # 3. Constraint penalty using log-barrier (as in algorithms.py)
-            constraints = self.prob.constraints(x_det, y)
-            barrier_mask = constraints > -0.1
-            if torch.any(barrier_mask):
-                barrier = -torch.sum(torch.log(-constraints[barrier_mask] + 0.1))
-                obj = obj + 0.01 * barrier
-            
             obj.backward()
-            optimizer.step()
-            
-            # Continue for full iterations (no early stopping)
-        
+            with torch.no_grad():
+                y -= step_size * y.grad
+                y.copy_(torch.clamp(y, min=-1.0, max=1.0))
         return y.detach()
     
-    def compute_stochastic_implicit_gradient(self, x, xi_upper, zeta_lower):
+    def compute_stochastic_implicit_gradient(self, x, xi_upper, zeta_lower, y_hat=None, u_dir=None, y_plus=None, y_minus=None, eps_fd=1e-5):
         """
         Compute stochastic implicit gradient following exact SSIGD formula:
         ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)
@@ -67,9 +54,10 @@ class CorrectSSIGD:
         try:
             x.requires_grad_(True)
             
-            # Step 1: Solve lower-level with q-perturbation for smoothing
-            y_hat = self.solve_lower_level_with_perturbation(x, self.q)
-            y_hat.requires_grad_(True)
+            # Step 1: Solve lower-level with q-perturbation for smoothing (can be shared)
+            if y_hat is None:
+                y_hat = self.solve_lower_level_with_perturbation(x, self.q)
+            y_hat = y_hat.detach().requires_grad_(True)
             
             # Step 2: Compute stochastic upper-level objective f(x,y;ξ)
             # Use the same problem objective as other methods for consistency
@@ -79,23 +67,32 @@ class CorrectSSIGD:
             # Step 3: Direct gradient term ∇_x f(x,ŷ(x);ξ)
             grad_x = torch.autograd.grad(f_val, x, create_graph=True, retain_graph=True)[0]
             
-            # Step 4: Implicit term [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)
-            # Use finite difference to approximate ∇ŷ*(x)
-            eps = 1e-4
-            x_pert = x + eps * torch.randn_like(x)
-            y_pert = self.solve_lower_level_with_perturbation(x_pert, self.q)
-            
-            # Finite difference approximation: ∇ŷ*(x) ≈ (y_pert - y_hat) / eps
-            dy_dx = (y_pert - y_hat) / eps
-            
-            # Gradient w.r.t. y: ∇_y f(x,ŷ(x);ξ)
+            # Step 4: Implicit term via symmetric finite difference along fixed unit direction u
+            eps = eps_fd
+            if u_dir is None:
+                u = torch.randn_like(x)
+                u = u / (torch.norm(u) + 1e-12)
+            else:
+                u = u_dir
+            if y_plus is None or y_minus is None:
+                x_plus = x + eps * u
+                x_minus = x - eps * u
+                y_plus = self.solve_lower_level_with_perturbation(x_plus, self.q)
+                y_minus = self.solve_lower_level_with_perturbation(x_minus, self.q)
+
+            # Gradient w.r.t. y at current (x, y_hat)
             grad_y = torch.autograd.grad(f_val, y_hat, create_graph=True, retain_graph=True)[0]
-            
-            # Implicit contribution: [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)
-            implicit_term = torch.sum(grad_y * dy_dx)
-            
-            # Total gradient: ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)
-            total_grad = grad_x + implicit_term
+
+            # Directional approximation: (J_y*(x) u)^T grad_y ≈ ((grad_y^T y_plus - grad_y^T y_minus) / (2 eps))
+            gy_dot_y_plus = torch.sum(grad_y.detach() * y_plus)
+            gy_dot_y_minus = torch.sum(grad_y.detach() * y_minus)
+            directional_scalar = (gy_dot_y_plus - gy_dot_y_minus) / (2.0 * eps)
+
+            # Form a vector estimator along u
+            implicit_vec = directional_scalar * u
+
+            # Total gradient vector
+            total_grad = grad_x + implicit_vec
             
             x.requires_grad_(False)
             
@@ -119,20 +116,49 @@ class CorrectSSIGD:
         print(f"Correct SSIGD: T={T}, beta={beta:.4f}")
         print(f"  Following exact formula: ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)")
         
+        # Debug-focused controls (paper uses constant-beta SSIGD; choose practical K)
+        grad_averaging_K = 32  # number of stochastic samples to average per step
+        clip_threshold = 3.0    # gradient clipping threshold (L2 norm)
+
+        prev_loss = None
+        worsen_count = 0
+        step_cap = 0.05  # cap on ||Δx|| per iteration
         for t in range(T):
             try:
-                # Sample stochastic noise for both levels (as in algorithms.py)
-                xi_upper = torch.randn(1, device=self.device, dtype=self.dtype) * 0.01
-                zeta_lower = torch.randn(self.prob.dim, device=self.device, dtype=self.dtype) * 0.01
-                
-                # Compute stochastic implicit gradient
-                grad = self.compute_stochastic_implicit_gradient(x, xi_upper, zeta_lower)
+                # Precompute shared lower-level solution for this x
+                shared_y_hat = self.solve_lower_level_with_perturbation(x, self.q)
+
+                # Fixed unit direction u shared across all K samples this iteration
+                u_dir = torch.randn_like(x)
+                u_dir = u_dir / (torch.norm(u_dir) + 1e-12)
+
+                # Precompute symmetric FD LL solves once per iteration
+                eps_fd = 1e-5
+                x_plus = x + eps_fd * u_dir
+                x_minus = x - eps_fd * u_dir
+                y_plus = self.solve_lower_level_with_perturbation(x_plus, self.q)
+                y_minus = self.solve_lower_level_with_perturbation(x_minus, self.q)
+
+                # Share the same xi_upper for logging alignment (estimator still averages K)
+                xi_upper_shared = torch.randn(1, device=self.device, dtype=self.dtype) * 0.01
+
+                # Gradient averaging over K stochastic samples
+                grad_accum = torch.zeros_like(x)
+                for _ in range(grad_averaging_K):
+                    xi_upper = torch.randn(1, device=self.device, dtype=self.dtype) * 0.01
+                    zeta_lower = torch.randn(self.prob.dim, device=self.device, dtype=self.dtype) * 0.01
+                    grad_k = self.compute_stochastic_implicit_gradient(
+                        x, xi_upper, zeta_lower, y_hat=shared_y_hat, u_dir=u_dir, y_plus=y_plus, y_minus=y_minus, eps_fd=eps_fd
+                    )
+                    grad_accum = grad_accum + grad_k
+                grad = grad_accum / float(grad_averaging_K)
                 
                 # Track progress (evaluate UL at current x BEFORE the update so t=0 matches x0)
                 if t % 1 == 0:
-                    # Use proper problem objective instead of hardcoded formula
+                    # Align UL loss logging noise with estimator’s xi_upper
                     y_opt, _ = self.prob.solve_lower_level(x)
-                    loss = self.prob.upper_objective(x, y_opt).item()
+                    noise_upper_log = xi_upper_shared * torch.ones_like(self.prob.Q_upper)
+                    loss = self.prob.upper_objective(x, y_opt, noise_upper_log).item()
                     losses.append(loss)
                     grad_norm = torch.norm(grad).item()
                     hypergrad_norms.append(grad_norm)
@@ -148,9 +174,29 @@ class CorrectSSIGD:
                     if grad_norm > 1000:
                         print(f"    Warning: Large gradient norm {grad_norm:.2e} at iteration {t}")
                 
-                # Update with adaptive learning rate (AFTER logging)
-                lr_t = beta / (1 + 0.0001 * t)
-                x = x - lr_t * grad
+                # Gradient clipping (by L2 norm)
+                gnorm = torch.norm(grad)
+                if torch.isfinite(gnorm) and gnorm > clip_threshold:
+                    grad = grad * (clip_threshold / gnorm)
+
+                # Adaptive step-size: if loss keeps worsening, reduce beta
+                if prev_loss is not None and loss > prev_loss + 1e-3:
+                    worsen_count += 1
+                else:
+                    worsen_count = 0
+                if worsen_count >= 3:
+                    beta = max(beta * 0.5, 1e-4)
+                    worsen_count = 0
+
+                # Step clipping: cap ||Δx|| = beta * ||grad||
+                step_norm = beta * torch.norm(grad)
+                if torch.isfinite(step_norm) and step_norm > step_cap:
+                    scale = step_cap / (step_norm + 1e-12)
+                    x = x - (beta * scale) * grad
+                else:
+                    x = x - beta * grad
+
+                prev_loss = loss
                 
             except Exception as e:
                 print(f"  Error at iteration {t}: {str(e)[:50]}")
