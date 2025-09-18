@@ -13,9 +13,6 @@ class CorrectSSIGD:
     2. q-perturbation applied to lower-level objective
     3. Proper stochastic gradient handling
     4. Single fixed perturbation for smoothing
-    5. FIXED: Logs UL loss every iteration for fair comparison with F2CSA/DS-BLO
-    6. FIXED: Uses stochastic UL loss evaluation to match DS-BLO approach
-    7. FIXED: Removed early stopping for consistent T iterations
     """
     
     def __init__(self, problem: StronglyConvexBilevelProblem):
@@ -114,7 +111,6 @@ class CorrectSSIGD:
     def solve(self, T=100, beta=0.01, alpha=0.05, x0=None):
         """
         Main SSIGD algorithm following the paper exactly
-        FIXED: Now logs UL loss every iteration and uses stochastic evaluation for fair comparison
         """
         x = (x0.detach().to(device=self.device, dtype=self.dtype).clone()
              if x0 is not None else
@@ -124,9 +120,6 @@ class CorrectSSIGD:
         
         print(f"Correct SSIGD: T={T}, beta={beta:.4f}")
         print(f"  Following exact formula: ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)")
-        print(f"  FIXED: Logging UL loss every iteration for fair comparison with F2CSA/DS-BLO")
-        print(f"  FIXED: Using stochastic UL loss evaluation to match DS-BLO approach")
-        print(f"  FIXED: Removed early stopping - running full {T} iterations")
         
         for t in range(T):
             try:
@@ -137,30 +130,26 @@ class CorrectSSIGD:
                 # Compute stochastic implicit gradient
                 grad = self.compute_stochastic_implicit_gradient(x, xi_upper, zeta_lower)
                 
-                # FIXED: Track progress EVERY iteration (not just every 10th)
-                # Evaluate UL at current x BEFORE the update so t=0 matches x0
-                y_opt, _ = self.prob.solve_lower_level(x)
-                
-                # FIXED: Use deterministic UL loss evaluation (no noise_up)
-                loss = self.prob.upper_objective(x, y_opt).item()
-                losses.append(loss)
-                
-                grad_norm = torch.norm(grad).item()
-                hypergrad_norms.append(grad_norm)
-                
-                # Print progress every 100 iterations to avoid spam
-                if t % 100 == 0 or t < 5:
+                # Track progress (evaluate UL at current x BEFORE the update so t=0 matches x0)
+                if t % 10 == 0 or t < 5:
+                    # Use proper problem objective instead of hardcoded formula
+                    y_opt, _ = self.prob.solve_lower_level(x)
+                    loss = self.prob.upper_objective(x, y_opt).item()
+                    losses.append(loss)
+                    grad_norm = torch.norm(grad).item()
+                    hypergrad_norms.append(grad_norm)
+                    
                     print(f"  t={t:3d}: loss={loss:.6f}, grad_norm={grad_norm:.3f}")
-                
-                # FIXED: Removed early stopping - let algorithm run full T iterations
-                # This ensures fair comparison with F2CSA and DS-BLO
-                # if torch.isnan(grad).any() or torch.isinf(grad).any():
-                #     print(f"    Warning: Invalid gradient at iteration {t}")
-                #     break
-                # 
-                # if grad_norm > 1000:
-                #     print(f"    Warning: Large gradient norm {grad_norm:.2e} at iteration {t}")
-                #     break
+                    
+                    # Check for numerical issues
+                    if torch.isnan(grad).any() or torch.isinf(grad).any():
+                        print(f"    Warning: Invalid gradient at iteration {t}")
+                        break
+                    
+                    # Check for explosion
+                    if grad_norm > 1000:
+                        print(f"    Warning: Large gradient norm {grad_norm:.2e} at iteration {t}")
+                        break
                 
                 # Update with adaptive learning rate (AFTER logging)
                 lr_t = beta / (1 + 0.0001 * t)
@@ -168,13 +157,8 @@ class CorrectSSIGD:
                 
             except Exception as e:
                 print(f"  Error at iteration {t}: {str(e)[:50]}")
-                # FIXED: Continue instead of breaking to ensure T iterations
-                # Add zero values to maintain array consistency
-                losses.append(float('inf'))
-                hypergrad_norms.append(float('inf'))
                 continue
         
-        print(f"  Completed {T} iterations with {len(losses)} UL loss evaluations")
         return x, losses, hypergrad_norms
 
 def test_correct_ssigd():
@@ -204,7 +188,6 @@ def test_correct_ssigd():
     print(f"  Final x: {x_final}")
     print(f"  Max gradient norm: {max(grad_norms):.3f}")
     print(f"  Loss trajectory: {losses[:5]} ... {losses[-5:]}")
-    print(f"  Total iterations logged: {len(losses)}")
     
     # Check for numerical stability
     if max(grad_norms) > 100:
@@ -225,9 +208,6 @@ def compare_implementations():
     print("   ❌ Didn't apply q-perturbation to lower-level objective")
     print("   ❌ Used different stochastic gradient structure")
     print("   ❌ Missing proper smoothing mechanism")
-    print("   ❌ Only logged UL loss every 10th iteration")
-    print("   ❌ Used deterministic UL loss evaluation")
-    print("   ❌ Had early stopping that broke fair comparison")
     
     print("\n2. CORRECT IMPLEMENTATION FEATURES:")
     print("   ✅ Log-barrier penalty for constraints (as in algorithms.py)")
@@ -235,18 +215,12 @@ def compare_implementations():
     print("   ✅ Exact stochastic gradient formula from SSIGD paper")
     print("   ✅ Single fixed perturbation for smoothing")
     print("   ✅ Proper scaling and bounds")
-    print("   ✅ FIXED: Logs UL loss every iteration for fair comparison")
-    print("   ✅ FIXED: Uses stochastic UL loss evaluation to match DS-BLO")
-    print("   ✅ FIXED: Removed early stopping for consistent T iterations")
     
     print("\n3. KEY DIFFERENCES:")
     print("   - Constraint handling: PGD → Log-barrier penalty")
     print("   - Perturbation: Not applied → Applied to lower-level")
     print("   - Smoothing: Finite differences → q-perturbation smoothing")
     print("   - Formula: Approximate → Exact SSIGD formula")
-    print("   - Logging frequency: Every 10th → Every iteration")
-    print("   - UL loss evaluation: Deterministic → Stochastic")
-    print("   - Early stopping: Enabled → Disabled for fair comparison")
 
 if __name__ == "__main__":
     # Run comparison analysis
