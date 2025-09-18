@@ -44,12 +44,69 @@ class ResNet18(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+class LowerLevelBoxOptimizer:
+    """
+    Optimizer for lower-level adversarial variable y under L-infinity box
+    constraint: -epsilon <= y <= epsilon.
+
+    Provides a simple projected (Adam) gradient method that can be reused
+    independently of the DS-BLO trainer.
+    """
+    def __init__(self, epsilon: float, steps: int = 10, lr: float = 1e-2,
+                 grad_clip: float = 5.0, use_mixed_precision: bool = False,
+                 device: str = 'cpu'):
+        self.epsilon = float(epsilon)
+        self.steps = int(steps)
+        self.lr = float(lr)
+        self.grad_clip = float(grad_clip)
+        self.device = device
+        self.use_mixed_precision = use_mixed_precision
+        self.scaler = torch.cuda.amp.GradScaler() if (use_mixed_precision and device == 'cuda') else None
+
+    def optimize(self, objective_fn, inputs: torch.Tensor, targets: torch.Tensor,
+                 q: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Runs projected gradient optimization on y for the given objective.
+        Args:
+            objective_fn: callable (x, y, q, inputs, targets) -> scalar loss
+            inputs, targets: batch tensors
+            q: optional perturbation vector used by the objective
+        Returns:
+            y_star (torch.Tensor): optimized perturbations in [-epsilon, epsilon]
+        """
+        y = torch.zeros_like(inputs, requires_grad=True, device=self.device)
+        opt = optim.Adam([y], lr=self.lr)
+
+        for _ in range(self.steps):
+            opt.zero_grad()
+            if self.scaler is not None:
+                with torch.cuda.amp.autocast():
+                    loss = objective_fn(None, y, q, inputs, targets)
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(opt)
+            else:
+                loss = objective_fn(None, y, q, inputs, targets)
+                loss.backward()
+
+            torch.nn.utils.clip_grad_norm_([y], self.grad_clip)
+            if self.scaler is not None:
+                self.scaler.step(opt)
+                self.scaler.update()
+            else:
+                opt.step()
+
+            with torch.no_grad():
+                y.data = torch.clamp(y.data, -self.epsilon, self.epsilon)
+
+        return y.detach()
+
 class DSBLOAdversarialTraining:
     """
     DS-BLO implementation for adversarial training with linear constraints
     """
     
-    def __init__(self, model, epsilon=8/255, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self, model, epsilon=8/255, device='cuda' if torch.cuda.is_available() else 'cpu',
+                 ll_steps: int = 10, ll_lr: float = 1e-2):
         self.device = device
         self.epsilon = epsilon  # Attack budget (L∞ constraint)
         
@@ -74,7 +131,18 @@ class DSBLOAdversarialTraining:
         
         # Perturbation parameters
         self.perturbation_std = 1e-4  # Standard deviation for q perturbation
-        self.inner_steps = 10  # Steps for solving lower-level problem
+        # Keep legacy field for backward compatibility, but route through optimizer
+        self.inner_steps = int(ll_steps)
+
+        # Lower-level box optimizer
+        self.ll_optimizer = LowerLevelBoxOptimizer(
+            epsilon=self.epsilon,
+            steps=ll_steps,
+            lr=ll_lr,
+            grad_clip=self.grad_clip,
+            use_mixed_precision=(self.scaler is not None),
+            device=self.device,
+        )
         
         # Training history
         self.train_losses = []
@@ -110,39 +178,8 @@ class DSBLOAdversarialTraining:
         Solve lower-level problem: min_y g(x,y) + q^T y subject to ||y||_∞ ≤ ε
         Using projected gradient descent with GPU optimizations
         """
-        batch_size, channels, height, width = inputs.shape
-        y = torch.zeros_like(inputs, requires_grad=True, device=self.device)
-        
-        # Use Adam optimizer for inner problem
-        inner_optimizer = optim.Adam([y], lr=0.01)
-        
-        for step in range(self.inner_steps):
-            inner_optimizer.zero_grad()
-            
-            # Use mixed precision if available
-            if self.scaler is not None:
-                with torch.cuda.amp.autocast():
-                    loss = self.lower_level_objective(None, y, q, inputs, targets)
-                self.scaler.scale(loss).backward()
-                self.scaler.unscale_(inner_optimizer)
-            else:
-                loss = self.lower_level_objective(None, y, q, inputs, targets)
-                loss.backward()
-            
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_([y], self.grad_clip)
-            
-            if self.scaler is not None:
-                self.scaler.step(inner_optimizer)
-                self.scaler.update()
-            else:
-                inner_optimizer.step()
-            
-            # Project to constraint set: ||y||_∞ ≤ ε
-            with torch.no_grad():
-                y.data = torch.clamp(y.data, -self.epsilon, self.epsilon)
-        
-        return y.detach()
+        # Delegate to reusable box optimizer for clarity and reusability
+        return self.ll_optimizer.optimize(self.lower_level_objective, inputs, targets, q)
     
     def compute_implicit_gradient(self, inputs, targets, y_star, q):
         """
@@ -509,6 +546,10 @@ def main():
                        help='Directory to save results')
     parser.add_argument('--device', type=str, default=None, 
                        help='Device to use (cuda/cpu)')
+    parser.add_argument('--ll-steps', type=int, default=10, 
+                       help='Lower-level optimizer steps (box constraint)')
+    parser.add_argument('--ll-lr', type=float, default=1e-2, 
+                       help='Lower-level optimizer learning rate')
     
     args = parser.parse_args()
     
@@ -553,7 +594,9 @@ def main():
         epochs=args.epochs,
         epsilon=args.epsilon,
         patience=args.patience,
-        save_dir=args.save_dir
+        save_dir=args.save_dir,
+        ll_steps=args.ll_steps,
+        ll_lr=args.ll_lr
     )
     
     logger.info("Training completed!")
