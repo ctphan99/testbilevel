@@ -51,8 +51,39 @@ class AccurateLowerLevelSolver:
         # Fallback to improved iterative solver
         return self._solve_iterative_improved(x, alpha, max_iter, tol)
     
-    def _solve_cvxpy(self, x: torch.Tensor, tol: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
-        """Solve using CVXPY for high precision"""
+    def solve_lower_level_with_solver(self, x: torch.Tensor, alpha: float, 
+                                     max_iter: int, tol: float, solver_name: str) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+        """
+        Solve lower-level problem with specified solver
+        
+        Args:
+            x: Upper-level variable
+            alpha: Accuracy parameter (δ = α³)
+            max_iter: Maximum iterations
+            tol: Convergence tolerance
+            solver_name: Solver to use ('SCS', 'OSQP', 'Clarabel')
+            
+        Returns:
+            y_opt: Accurate solution to lower-level problem
+            lambda_opt: Accurate dual variables
+            info: Solution information
+        """
+        # Set δ = α³ as per F2CSA.tex
+        delta = alpha ** 3
+        
+        # Try specified solver first
+        try:
+            y_opt, lambda_opt, info = self._solve_cvxpy_with_solver(x, tol, solver_name)
+            if info['converged']:
+                return y_opt, lambda_opt, info
+        except Exception as e:
+            print(f"{solver_name} failed: {e}")
+        
+        # Fallback to improved iterative solver
+        return self._solve_iterative_improved(x, alpha, max_iter, tol)
+    
+    def _solve_cvxpy_with_solver(self, x: torch.Tensor, tol: float, solver_name: str) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+        """Solve using CVXPY with specified solver"""
         try:
             import cvxpy as cp
             
@@ -71,23 +102,16 @@ class AccurateLowerLevelSolver:
             constraints = [A_np @ x_np + B_np @ y_cp - b_np <= 0]
             
             prob = cp.Problem(objective, constraints)
-            # Try faster solvers in order of preference
-            solvers_to_try = [cp.CLARABEL, cp.OSQP, cp.CVXOPT, cp.SCS]
-            solved = False
             
-            for solver in solvers_to_try:
-                try:
-                    prob.solve(solver=solver, verbose=False)
-                    if prob.status in ["optimal", "optimal_near"]:
-                        print(f"  Using solver: {solver}")
-                        solved = True
-                        break
-                except Exception as e:
-                    print(f"  Solver {solver} failed: {e}")
-                    continue
-            
-            if not solved:
-                # Fallback to default solver
+            # Configure solver based on solver_name
+            if solver_name.upper() == 'SCS':
+                prob.solve(solver=cp.SCS, verbose=False, eps=tol, max_iters=10000)
+            elif solver_name.upper() == 'OSQP':
+                prob.solve(solver=cp.OSQP, verbose=False, eps_abs=tol, eps_rel=tol, max_iter=10000, polish=True)
+            elif solver_name.upper() == 'CLARABEL':
+                prob.solve(solver=cp.CLARABEL, verbose=False, eps_abs=tol, max_iter=10000)
+            else:
+                # Default solver
                 prob.solve(verbose=False)
             
             if prob.status in ["optimal", "optimal_near"]:
@@ -109,16 +133,20 @@ class AccurateLowerLevelSolver:
                     'constraint_violations': violations,
                     'converged': True,
                     'max_violation': max_violation,
-                    'solver': 'CVXPY'
+                    'solver': solver_name.upper()
                 }
                 return y_opt, lambda_opt, info
             else:
-                raise Exception(f"CVXPY failed with status: {prob.status}")
+                raise Exception(f"{solver_name} failed with status: {prob.status}")
                 
         except ImportError:
-            raise ImportError("CVXPY not available")
+            raise ImportError(f"CVXPY with {solver_name} not available")
         except Exception as e:
-            raise Exception(f"CVXPY error: {e}")
+            raise Exception(f"{solver_name} error: {e}")
+
+    def _solve_cvxpy(self, x: torch.Tensor, tol: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+        """Solve using CVXPY for high precision (default solver)"""
+        return self._solve_cvxpy_with_solver(x, tol, 'SCS')  # Default to SCS
     
     def _solve_iterative_improved(self, x: torch.Tensor, alpha: float, max_iter: int, tol: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """Improved iterative solver with better convergence properties"""
