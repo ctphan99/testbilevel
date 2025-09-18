@@ -117,8 +117,8 @@ class DSBLOOptII:
 
         x = x0.clone().detach()
         ul_losses = []
-        hypergrad_norms = []  # ||m_t|| (EMA momentum norm)
-        hypergrad_norms_raw = []  # ||g_t|| (instantaneous gradient norm before momentum)
+        hypergrad_norms = []
+        raw_grad_norms = []  # Track raw ||g_t|| in addition to ||m_t||
         x_history = []
 
         # q1 ~ Q (LL perturbation)
@@ -254,14 +254,21 @@ class DSBLOOptII:
                             if B_norm_sq > 1e-10:
                                 correction += violations[i] * self.problem.B[i] / B_norm_sq
                     y = y - correction
-                ul_losses.append(self.problem.upper_objective(x, y, noise_up_track).item())
+                # Use fixed CRN if available
+                if hasattr(self, 'crn_upper'):
+                    ul_losses.append(self.problem.upper_objective(x, y, self.crn_upper).item())
+                else:
+                    ul_losses.append(self.problem.upper_objective(x, y, noise_up_track).item())
             else:
-                noise_up_track, _ = self.problem._sample_instance_noise()
                 y_star, _ = self.problem.solve_lower_level(x)
-                ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
-            # log both raw and momentum norms
-            hypergrad_norms_raw.append(g_norm.item())
+                # Use fixed CRN if available
+                if hasattr(self, 'crn_upper'):
+                    ul_losses.append(self.problem.upper_objective(x, y_star, self.crn_upper).item())
+                else:
+                    noise_up_track, _ = self.problem._sample_instance_noise()
+                    ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
             hypergrad_norms.append(torch.norm(m).item())
+            raw_grad_norms.append(torch.norm(g).item())  # Log raw gradient norm
             x_history.append(x.clone().detach())
 
             # adaptive eta cap if not improving
@@ -279,7 +286,7 @@ class DSBLOOptII:
                         since_best = 0
 
             if t % 100 == 0:
-                print(f"Iteration {t}/{T}: ||g|| = {hypergrad_norms_raw[-1]:.6f}, ||m|| = {hypergrad_norms[-1]:.6f}, UL = {ul_losses[-1]:.6f}")
+                print(f"Iteration {t}/{T}: ||m|| = {hypergrad_norms[-1]:.6f}, UL = {ul_losses[-1]:.6f}")
 
             # decay noise
             sigma = max(noise_min, sigma * noise_decay)
@@ -291,7 +298,7 @@ class DSBLOOptII:
             'final_ul_loss': ul_losses[-1],
             'ul_losses': ul_losses,
             'hypergrad_norms': hypergrad_norms,
-            'hypergrad_norms_raw': hypergrad_norms_raw,
+            'raw_grad_norms': raw_grad_norms,  # Include raw gradient norms
             'x_history': x_history,
             'iterations': T,
             'converged': torch.norm(m).item() < 1e-3,

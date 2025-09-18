@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Exact SBATCH Configuration: F2CSA vs DS-BLO Comparison
+Exact SBATCH Configuration: F2CSA vs DS-BLO Comparison with Stable SSIGD
 Uses the exact same parameters as the SBATCH run for fair comparison
 """
 
@@ -15,7 +15,7 @@ from f2csa_algorithm_corrected_final import F2CSAAlgorithm1Final
 from f2csa_algorithm2_working import F2CSAAlgorithm2Working
 from dsblo_conservative import DSBLOConservative
 from dsblo_optII import DSBLOOptII
-from ssigd_correct_final import CorrectSSIGD
+from ssigd_stable_debug import StableSSIGD
 import warnings
 
 # Legacy DsBlo adapter imports
@@ -99,10 +99,10 @@ class LegacyNoisyProblemAdapter:
 warnings.filterwarnings('ignore')
 
 def run_exact_sbatch_vs_dsblo():
-    """Run F2CSA vs DS-BLO with exact SBATCH configuration"""
+    """Run F2CSA vs DS-BLO with exact SBATCH configuration and stable SSIGD"""
     
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Exact SBATCH Configuration: F2CSA vs DS-BLO')
+    parser = argparse.ArgumentParser(description='Exact SBATCH Configuration: F2CSA vs DS-BLO with Stable SSIGD')
     parser.add_argument('--T', type=int, default=5000, help='Number of iterations')
     parser.add_argument('--D', type=float, default=0.08, help='Clipping parameter')
     parser.add_argument('--eta', type=float, default=2e-4, help='Step size')
@@ -110,12 +110,11 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--alpha', type=float, default=0.6, help='Accuracy parameter')
     parser.add_argument('--warm-ll', action='store_true', help='Enable lower-level warm start')
     parser.add_argument('--keep-adam-state', action='store_true', help='Keep Adam optimizer state')
-    parser.add_argument('--plot-name', type=str, default='exact_sbatch_vs_dsblo.png', help='Plot filename')
+    parser.add_argument('--plot-name', type=str, default='exact_sbatch_vs_dsblo_stable.png', help='Plot filename')
     parser.add_argument('--dim', type=int, default=5, help='Problem dimension')
     parser.add_argument('--constraints', type=int, default=3, help='Number of constraints')
-    # removed external perturbation; rely on per-sample instance noise from problem
     parser.add_argument('--dsblo-opt', type=str, choices=['I', 'II'], default='II', help='DS-BLO option (I deterministic, II stochastic)')
-    parser.add_argument('--dsblo-sigma', type=float, default=0.0, help='Extra stochastic noise std for DS-BLO (set 0 to rely on instance noise only)')
+    parser.add_argument('--dsblo-sigma', type=float, default=0.0, help='Extra stochastic noise std for DS-BLO')
     parser.add_argument('--dsblo-gamma1', type=float, default=5.0, help='DS-BLO gamma1 for step size')
     parser.add_argument('--dsblo-gamma2', type=float, default=1.0, help='DS-BLO gamma2 for step size')
     parser.add_argument('--dsblo-beta', type=float, default=0.6, help='DS-BLO momentum beta')
@@ -132,16 +131,21 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--only-ssigd', action='store_true', help='Run only SSIGD and plot its results')
     parser.add_argument('--with-ssigd', action='store_true', help='Include SSIGD in comparison')
     parser.add_argument('--ul-track-noisy-ll', action='store_true', help='Track UL using LL solved with noisy Q_lower each iter (DS-BLO)')
+    parser.add_argument('--ssigd-strategy', type=str, choices=['constant_sqrt', 'diminishing', 'adaptive'], 
+                        default='constant_sqrt', help='SSIGD step size strategy')
+    parser.add_argument('--ssigd-mu-f', type=float, default=0.1, help='Strongly-convex parameter for diminishing step size')
+    parser.add_argument('--ssigd-eps-fd', type=float, default=1e-4, help='Finite difference step size for SSIGD')
+    parser.add_argument('--ssigd-clip-threshold', type=float, default=1.0, help='Gradient clipping threshold for SSIGD')
     
     args = parser.parse_args()
     
     print("=" * 80)
-    print("EXACT SBATCH CONFIGURATION: F2CSA vs DS-BLO COMPARISON")
+    print("EXACT SBATCH CONFIGURATION: F2CSA vs DS-BLO COMPARISON WITH STABLE SSIGD")
     print("=" * 80)
     print(f"Problem: dim={args.dim}, constraints={args.constraints}")
     print(f"F2CSA Config: T={args.T}, D={args.D}, eta={args.eta}, Ng={args.Ng}, alpha={args.alpha}")
     print(f"Warm start: {args.warm_ll}, Adam state: {args.keep_adam_state}")
-    # no explicit perturbation std; stochasticity comes from instance noise
+    print(f"SSIGD Strategy: {args.ssigd_strategy}, μ_F={args.ssigd_mu_f}, eps_fd={args.ssigd_eps_fd}")
     print()
     
     # Seeding for reproducible shared x0 (optional)
@@ -154,10 +158,6 @@ def run_exact_sbatch_vs_dsblo():
     # Create problem instance (optionally align noise std)
     noise_std = args.problem_noise_std if args.problem_noise_std is not None else 0.1
     problem = StronglyConvexBilevelProblem(dim=args.dim, num_constraints=args.constraints, noise_std=noise_std)
-    
-    # Fix CRN for UL loss evaluation across all methods
-    crn_upper, crn_lower = problem._sample_instance_noise()
-    print(f"Fixed CRN for UL loss evaluation across all methods")
     
     # Initialize starting point
     x0 = torch.randn(args.dim, dtype=torch.float64)
@@ -178,7 +178,6 @@ def run_exact_sbatch_vs_dsblo():
         print("=" * 50)
         
         algorithm2 = F2CSAAlgorithm2Working(problem)
-        algorithm2.crn_upper = crn_upper  # Set fixed CRN for UL loss evaluation
         delta = args.alpha ** 3
         
         f2csa_results = algorithm2.optimize(
@@ -204,7 +203,6 @@ def run_exact_sbatch_vs_dsblo():
     if not args.only_ssigd:
         if args.dsblo_opt == 'II':
             dsblo = DSBLOOptII(problem)
-            dsblo.crn_upper = crn_upper  # Set fixed CRN for UL loss evaluation
             dsblo_results = dsblo.optimize(
                 x0, args.T, args.alpha,
                 sigma=args.dsblo_sigma,
@@ -250,15 +248,21 @@ def run_exact_sbatch_vs_dsblo():
             'x_history': x_hist,
         }
 
-    # Run SSIGD if requested
+    # Run Stable SSIGD if requested
     ssigd_results = None
     if args.with_ssigd:
         print("=" * 50)
-        print("RUNNING SSIGD")
+        print("RUNNING STABLE SSIGD")
         print("=" * 50)
-        ssigd_algo = CorrectSSIGD(problem)
-        ssigd_algo.crn_upper = crn_upper  # Set fixed CRN for UL loss evaluation
-        x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd = ssigd_algo.solve(T=args.T, beta=args.eta, x0=x0)
+        ssigd_algo = StableSSIGD(problem)
+        x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd, x_hist_ssigd, step_sizes = ssigd_algo.solve(
+            T=args.T, 
+            x0=x0,
+            step_strategy=args.ssigd_strategy,
+            mu_F=args.ssigd_mu_f,
+            eps_fd=args.ssigd_eps_fd,
+            clip_threshold=args.ssigd_clip_threshold
+        )
         ssigd_results = {
             'final_ul_loss': ul_losses_ssigd[-1],
             'final_gradient_norm': hypergrad_norms_ssigd[-1],
@@ -266,14 +270,17 @@ def run_exact_sbatch_vs_dsblo():
             'iterations': args.T,
             'ul_losses': ul_losses_ssigd,
             'hypergrad_norms': hypergrad_norms_ssigd,
-            'x_history': [x_ssigd] * args.T  # SSIGD only returns final x, so replicate for history
+            'x_history': x_hist_ssigd,
+            'step_sizes': step_sizes
         }
         print()
-        print("SSIGD Results:")
+        print("Stable SSIGD Results:")
         print(f"  Final UL loss: {ssigd_results['final_ul_loss']:.6f}")
         print(f"  Final gradient norm: {ssigd_results['final_gradient_norm']:.6f}")
         print(f"  Converged: {ssigd_results['converged']}")
         print(f"  Iterations: {ssigd_results['iterations']}")
+        print(f"  Final step size: {step_sizes[-1]:.6f}")
+        print(f"  Initial step size: {step_sizes[0]:.6f}")
         print()
     
     # Create comparison plot
@@ -299,6 +306,12 @@ def run_exact_sbatch_vs_dsblo():
                 y_star_t, _ = problem.solve_lower_level(x_t)
                 ul_dsblo_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
             ul_dsblo = ul_dsblo_crn
+        if ssigd_results is not None:
+            ul_ssigd_crn = []
+            for x_t in ssigd_results['x_history']:
+                y_star_t, _ = problem.solve_lower_level(x_t)
+                ul_ssigd_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
+            ssigd_results['ul_losses'] = ul_ssigd_crn
 
     # Optional noisy overlay: Monte Carlo mean±std with fresh noise per point
     if args.ul_overlay_noisy:
@@ -337,7 +350,7 @@ def run_exact_sbatch_vs_dsblo():
     if ul_dsblo is not None:
         ax1.plot(ul_dsblo, label='DS-BLO', linewidth=2)
     if ssigd_results is not None:
-        ax1.plot(ssigd_results['ul_losses'], label='SSIGD', linewidth=2)
+        ax1.plot(ssigd_results['ul_losses'], label=f'SSIGD ({args.ssigd_strategy})', linewidth=2)
     if dsblo_legacy_results is not None:
         ax1.plot(dsblo_legacy_results['ul_losses'], label='DS-BLO (Legacy)', linewidth=2, linestyle=':')
     ax1.set_xlabel('Iteration')
@@ -366,11 +379,9 @@ def run_exact_sbatch_vs_dsblo():
     if f2csa_results is not None:
         ax2.plot(f2csa_results['hypergrad_norms'], label='F2CSA (SBATCH Config)', linewidth=2)
     if dsblo_results is not None:
-        ax2.plot(dsblo_results['hypergrad_norms'], label='DS-BLO (momentum ||m||)', linewidth=2)
-        if 'raw_grad_norms' in dsblo_results:
-            ax2.plot(dsblo_results['raw_grad_norms'], label='DS-BLO (raw ||g||)', linewidth=2, linestyle='--', alpha=0.7)
+        ax2.plot(dsblo_results['hypergrad_norms'], label='DS-BLO', linewidth=2)
     if ssigd_results is not None:
-        ax2.plot(ssigd_results['hypergrad_norms'], label='SSIGD', linewidth=2)
+        ax2.plot(ssigd_results['hypergrad_norms'], label=f'SSIGD ({args.ssigd_strategy})', linewidth=2)
     if dsblo_legacy_results is not None:
         ax2.plot(dsblo_legacy_results['hypergrad_norms'], label='DS-BLO (Legacy)', linewidth=2, linestyle=':')
     ax2.set_xlabel('Iteration')
@@ -394,7 +405,7 @@ def run_exact_sbatch_vs_dsblo():
     else:
         ax3.axis('off')
     
-    # Plot 4: DS-BLO trajectory
+    # Plot 4: DS-BLO and SSIGD trajectory
     if dsblo_results is not None:
         x_history_dsblo = torch.stack(dsblo_results['x_history'])
         ax4.plot(x_history_dsblo[:, 0], x_history_dsblo[:, 1], 'r-', alpha=0.7, linewidth=1, label='DS-BLO')
@@ -402,13 +413,16 @@ def run_exact_sbatch_vs_dsblo():
         ax4.scatter(x_history_dsblo[-1, 0], x_history_dsblo[-1, 1], color='red', s=100, label='End', zorder=5)
     if ssigd_results is not None:
         x_history_ssigd = torch.stack(ssigd_results['x_history'])
-        ax4.plot(x_history_ssigd[:, 0], x_history_ssigd[:, 1], 'g-', alpha=0.7, linewidth=1, label='SSIGD')
+        ax4.plot(x_history_ssigd[:, 0], x_history_ssigd[:, 1], 'g-', alpha=0.7, linewidth=1, label=f'SSIGD ({args.ssigd_strategy})')
+        if dsblo_results is None:  # Only show start/end if DS-BLO not present
+            ax4.scatter(x_history_ssigd[0, 0], x_history_ssigd[0, 1], color='green', s=100, label='Start', zorder=5)
+            ax4.scatter(x_history_ssigd[-1, 0], x_history_ssigd[-1, 1], color='red', s=100, label='End', zorder=5)
     if dsblo_legacy_results is not None:
         x_hist_legacy = torch.stack(dsblo_legacy_results['x_history'])
         ax4.plot(x_hist_legacy[:, 0], x_hist_legacy[:, 1], 'm--', alpha=0.7, linewidth=1, label='DS-BLO (Legacy)')
     ax4.set_xlabel('x[0]')
     ax4.set_ylabel('x[1]')
-    ax4.set_title('DS-BLO Trajectory (First 2 Dimensions)')
+    ax4.set_title('DS-BLO and SSIGD Trajectory (First 2 Dimensions)')
     ax4.legend()
     ax4.grid(True, alpha=0.3)
     
@@ -445,11 +459,14 @@ def run_exact_sbatch_vs_dsblo():
     if ssigd_results is not None:
         print(f"{'SSIGD Final UL Loss':<25} {'-':<20} {'-':<20} {ssigd_results['final_ul_loss']:<20.6f} {'SSIGD':<15}")
         print(f"{'SSIGD Final Grad Norm':<25} {'-':<20} {'-':<20} {ssigd_results['final_gradient_norm']:<20.6f} {'SSIGD':<15}")
+        print(f"{'SSIGD Strategy':<25} {'-':<20} {'-':<20} {args.ssigd_strategy:<20} {'SSIGD':<15}")
+        print(f"{'SSIGD Final Step Size':<25} {'-':<20} {'-':<20} {ssigd_results['step_sizes'][-1]:<20.6f} {'SSIGD':<15}")
     print("=" * 80)
     
     return {
         'f2csa_results': f2csa_results,
         'dsblo_results': dsblo_results,
+        'ssigd_results': ssigd_results,
         'initial_ul_loss': initial_ul_loss
     }
 

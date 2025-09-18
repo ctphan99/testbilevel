@@ -139,13 +139,11 @@ class StronglyConvexBilevelProblem:
         return g
 
     def constraints(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Box constraints |y_i| ≤ 1 encoded as inequalities h(y) ≤ 0.
-        Returns stacked vector: [y - 1; -y - 1].
-        """
+        """Constraint function: h(x,y) = Ax + By - b"""
+        # Ensure tensors are on same device and dtype
+        x = x.to(device=self.device, dtype=self.dtype)
         y = y.to(device=self.device, dtype=self.dtype)
-        upper = y - 1.0
-        lower = -y - 1.0
-        return torch.cat([upper, lower], dim=0)
+        return self.A @ x + self.B @ y - self.b
     
     def constraint_violations(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Get constraint violations: max(0, h(x,y))"""

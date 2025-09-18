@@ -119,7 +119,11 @@ class F2CSAAlgorithm2Working:
 
             # Compute upper-level loss at x_t to monitor Algorithm 2 gap (f(x, y*))
             y_star, _ = self.problem.solve_lower_level(x_t)
-            ul_loss_t = self.problem.upper_objective(x_t, y_star).item()
+            # Use fixed CRN if available
+            if hasattr(self, 'crn_upper'):
+                ul_loss_t = self.problem.upper_objective(x_t, y_star, self.crn_upper).item()
+            else:
+                ul_loss_t = self.problem.upper_objective(x_t, y_star).item()
             ul_losses.append(ul_loss_t)
 
             # Update direction with clipping
@@ -205,7 +209,11 @@ class F2CSAAlgorithm2Working:
         
         # Compute final upper-level loss f(x, y*) as Algorithm 2 gap
         y_star, _ = self.problem.solve_lower_level(x_out)
-        final_ul_loss = self.problem.upper_objective(x_out, y_star).item()
+        # Use fixed CRN if available
+        if hasattr(self, 'crn_upper'):
+            final_ul_loss = self.problem.upper_objective(x_out, y_star, self.crn_upper).item()
+        else:
+            final_ul_loss = self.problem.upper_objective(x_out, y_star).item()
         
         print(f"Final UL loss f(x, y*): {final_ul_loss:.6f}")
         print(f"Final hypergradient norm (diagnostic): {final_g_norm:.6f}")

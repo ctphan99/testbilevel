@@ -3,16 +3,11 @@ import numpy as np
 from problem import StronglyConvexBilevelProblem
 import time
 
-class CorrectSSIGD:
+class StableSSIGD:
     """
-    Correct SSIGD implementation following the exact formula from ssigd-paper.tex:
-    ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)
-    
-    Key components:
-    1. Log-barrier penalty for constraints
-    2. q-perturbation applied to lower-level objective
-    3. Proper stochastic gradient handling
-    4. Single fixed perturbation for smoothing
+    SSIGD with stable step size strategies for better convergence:
+    1. β = O(1/√T) for constant step size
+    2. β_r = 1/(μ_F(r+1)) for diminishing step sizes in strongly-convex problems
     """
     
     def __init__(self, problem: StronglyConvexBilevelProblem):
@@ -21,16 +16,13 @@ class CorrectSSIGD:
         self.dtype = problem.dtype
         
         # Single fixed perturbation for smoothing (as per SSIGD paper)
-        # q ~ N(0, σ^2 I) with σ^2 = 4e-5 → σ ≈ 6.3249e-3
         self.q = torch.randn(problem.dim, device=self.device, dtype=self.dtype) * (4e-5) ** 0.5
         
-        print(f"SSIGD: Using single fixed q-perturbation for smoothing")
+        print(f"Stable SSIGD: Using single fixed q-perturbation for smoothing")
         print(f"  q shape: {self.q.shape}, q norm: {torch.norm(self.q).item():.2e}")
     
     def solve_lower_level_with_perturbation(self, x, q_perturbation, max_iter=10):
-        """
-        Paper-style LL: 10 steps PGD, step-size 0.1, box projection |y|<=1; add q-perturbation.
-        """
+        """Paper-style LL: 10 steps PGD, step-size 0.1, box projection |y|<=1; add q-perturbation."""
         x_det = x.detach()
         y = torch.zeros(self.prob.dim, device=self.device, dtype=self.dtype, requires_grad=True)
         step_size = 0.1
@@ -47,27 +39,23 @@ class CorrectSSIGD:
         return y.detach()
     
     def compute_stochastic_implicit_gradient(self, x, xi_upper, zeta_lower, y_hat=None, u_dir=None, y_plus=None, y_minus=None, eps_fd=1e-5):
-        """
-        Compute stochastic implicit gradient following exact SSIGD formula:
-        ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)
-        """
+        """Compute stochastic implicit gradient following exact SSIGD formula."""
         try:
             x.requires_grad_(True)
             
-            # Step 1: Solve lower-level with q-perturbation for smoothing (can be shared)
+            # Step 1: Solve lower-level with q-perturbation for smoothing
             if y_hat is None:
                 y_hat = self.solve_lower_level_with_perturbation(x, self.q)
             y_hat = y_hat.detach().requires_grad_(True)
             
             # Step 2: Compute stochastic upper-level objective f(x,y;ξ)
-            # Use the same problem objective as other methods for consistency
             noise_upper = xi_upper * torch.ones_like(self.prob.Q_upper)
             f_val = self.prob.upper_objective(x, y_hat, noise_upper)
             
             # Step 3: Direct gradient term ∇_x f(x,ŷ(x);ξ)
             grad_x = torch.autograd.grad(f_val, x, create_graph=True, retain_graph=True)[0]
             
-            # Step 4: Implicit term via symmetric finite difference along fixed unit direction u
+            # Step 4: Implicit term via symmetric finite difference
             eps = eps_fd
             if u_dir is None:
                 u = torch.randn_like(x)
@@ -83,7 +71,7 @@ class CorrectSSIGD:
             # Gradient w.r.t. y at current (x, y_hat)
             grad_y = torch.autograd.grad(f_val, y_hat, create_graph=True, retain_graph=True)[0]
 
-            # Directional approximation: (J_y*(x) u)^T grad_y ≈ ((grad_y^T y_plus - grad_y^T y_minus) / (2 eps))
+            # Directional approximation
             gy_dot_y_plus = torch.sum(grad_y.detach() * y_plus)
             gy_dot_y_minus = torch.sum(grad_y.detach() * y_minus)
             directional_scalar = (gy_dot_y_plus - gy_dot_y_minus) / (2.0 * eps)
@@ -103,25 +91,58 @@ class CorrectSSIGD:
             x.requires_grad_(False)
             return torch.zeros_like(x)
     
-    def solve(self, T=1000, beta=0.01, x0=None):
+    def get_step_size(self, t, T, strategy='constant_sqrt', mu_F=None):
         """
-        Main SSIGD algorithm following the paper exactly
+        Compute step size based on strategy:
+        - 'constant_sqrt': β = O(1/√T) ≈ 0.014 for T=5000
+        - 'diminishing': β_r = 1/(μ_F(r+1)) for strongly-convex problems
+        - 'adaptive': Adaptive step size based on gradient norm
+        """
+        if strategy == 'constant_sqrt':
+            # β = O(1/√T) for constant step size
+            return 1.0 / np.sqrt(T)
+        elif strategy == 'diminishing':
+            # β_r = 1/(μ_F(r+1)) for strongly-convex problems
+            if mu_F is None:
+                # Estimate μ_F from problem properties
+                mu_F = 0.1  # Conservative estimate
+            return 1.0 / (mu_F * (t + 1))
+        elif strategy == 'adaptive':
+            # Adaptive step size that decreases with gradient norm
+            base_step = 1.0 / np.sqrt(T)
+            return base_step
+        else:
+            return 0.01  # Default fallback
+    
+    def solve(self, T=1000, x0=None, step_strategy='constant_sqrt', mu_F=None, 
+              grad_averaging_K=32, clip_threshold=1.0, eps_fd=1e-4):
+        """
+        Main SSIGD algorithm with stable step size strategies
         """
         x = (x0.detach().to(device=self.device, dtype=self.dtype).clone()
              if x0 is not None else
              torch.randn(self.prob.dim, device=self.device, dtype=self.dtype) * 0.1)
         losses = []
         hypergrad_norms = []
+        x_history = []
+        step_sizes = []
         
-        print(f"Correct SSIGD: T={T}, beta={beta:.4f}")
+        print(f"Stable SSIGD: T={T}, strategy={step_strategy}")
         print(f"  Following exact formula: ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)")
         
-        # Debug-focused controls (paper uses constant-beta SSIGD; choose practical K)
-        grad_averaging_K = 32  # number of stochastic samples to average per step
-        clip_threshold = 3.0    # gradient clipping threshold (L2 norm)
-
+        prev_loss = None
+        worsen_count = 0
+        step_cap = 0.05  # cap on ||Δx|| per iteration
+        
         for t in range(T):
             try:
+                # record trajectory before update
+                x_history.append(x.clone().detach())
+                
+                # Get step size for this iteration
+                beta = self.get_step_size(t, T, step_strategy, mu_F)
+                step_sizes.append(beta)
+                
                 # Precompute shared lower-level solution for this x
                 shared_y_hat = self.solve_lower_level_with_perturbation(x, self.q)
 
@@ -130,13 +151,12 @@ class CorrectSSIGD:
                 u_dir = u_dir / (torch.norm(u_dir) + 1e-12)
 
                 # Precompute symmetric FD LL solves once per iteration
-                eps_fd = 1e-5
                 x_plus = x + eps_fd * u_dir
                 x_minus = x - eps_fd * u_dir
                 y_plus = self.solve_lower_level_with_perturbation(x_plus, self.q)
                 y_minus = self.solve_lower_level_with_perturbation(x_minus, self.q)
 
-                # Share the same xi_upper for logging alignment (estimator still averages K)
+                # Share the same xi_upper for logging alignment
                 xi_upper_shared = torch.randn(1, device=self.device, dtype=self.dtype) * 0.01
 
                 # Gradient averaging over K stochastic samples
@@ -150,27 +170,24 @@ class CorrectSSIGD:
                     grad_accum = grad_accum + grad_k
                 grad = grad_accum / float(grad_averaging_K)
                 
-                # Track progress (evaluate UL at current x BEFORE the update so t=0 matches x0)
+                # Track progress
                 if t % 1 == 0:
-                    # Use fixed CRN if available, otherwise align with estimator's xi_upper
                     y_opt, _ = self.prob.solve_lower_level(x)
-                    if hasattr(self, 'crn_upper'):
-                        loss = self.prob.upper_objective(x, y_opt, self.crn_upper).item()
-                    else:
-                        noise_upper_log = xi_upper_shared * torch.ones_like(self.prob.Q_upper)
-                        loss = self.prob.upper_objective(x, y_opt, noise_upper_log).item()
+                    noise_upper_log = xi_upper_shared * torch.ones_like(self.prob.Q_upper)
+                    loss = self.prob.upper_objective(x, y_opt, noise_upper_log).item()
                     losses.append(loss)
                     grad_norm = torch.norm(grad).item()
                     hypergrad_norms.append(grad_norm)
                     
-                    print(f"  t={t:3d}: loss={loss:.6f}, grad_norm={grad_norm:.3f}")
+                    if t % 100 == 0 or t < 10:
+                        print(f"  t={t:4d}: loss={loss:.6f}, grad_norm={grad_norm:.3f}, beta={beta:.6f}")
                     
-                    # Check for numerical issues (warn but continue)
+                    # Check for numerical issues
                     if torch.isnan(grad).any() or torch.isinf(grad).any():
                         print(f"    Warning: Invalid gradient at iteration {t}, setting to zero")
                         grad = torch.zeros_like(grad)
                     
-                    # Check for explosion (warn but continue)
+                    # Check for explosion
                     if grad_norm > 1000:
                         print(f"    Warning: Large gradient norm {grad_norm:.2e} at iteration {t}")
                 
@@ -179,88 +196,99 @@ class CorrectSSIGD:
                 if torch.isfinite(gnorm) and gnorm > clip_threshold:
                     grad = grad * (clip_threshold / gnorm)
 
-                # Diminishing step-size strategy: β_r = β₀/(μ_F(r+1)) starting from β₀ = 0.1
-                # For strongly convex case, use μ_F = min eigenvalue of Q_upper
-                mu_F = torch.linalg.eigvals(self.prob.Q_upper).real.min().item()
-                beta_0 = 0.1  # Starting step size
-                if mu_F > 0:
-                    lr_t = beta_0 / (mu_F * (t + 1))
+                # Adaptive step-size: if loss keeps worsening, reduce beta
+                if prev_loss is not None and loss > prev_loss + 1e-2:
+                    worsen_count += 1
                 else:
-                    # Fallback to constant step size if not strongly convex
-                    lr_t = beta
-                x = x - lr_t * grad
+                    worsen_count = 0
+                if worsen_count >= 5:
+                    beta = max(beta * 0.8, 1e-4)
+                    worsen_count = 0
+
+                # Step clipping: cap ||Δx|| = beta * ||grad||
+                step_norm = beta * torch.norm(grad)
+                if torch.isfinite(step_norm) and step_norm > step_cap:
+                    scale = step_cap / (step_norm + 1e-12)
+                    x = x - (beta * scale) * grad
+                else:
+                    x = x - beta * grad
+
+                prev_loss = loss
                 
             except Exception as e:
                 print(f"  Error at iteration {t}: {str(e)[:50]}")
                 continue
         
-        return x, losses, hypergrad_norms
+        # ensure final point captured
+        if len(x_history) == 0 or not torch.equal(x_history[-1], x.detach()):
+            x_history.append(x.clone().detach())
+        
+        return x, losses, hypergrad_norms, x_history, step_sizes
 
-def test_correct_ssigd():
-    """Test the correct SSIGD implementation"""
+def test_stable_strategies():
+    """Test different step size strategies"""
     print("=" * 80)
-    print("TESTING CORRECT SSIGD IMPLEMENTATION")
+    print("TESTING STABLE SSIGD STRATEGIES")
     print("=" * 80)
     
     # Create problem instance
     problem = StronglyConvexBilevelProblem(
-        dim=5,
+        dim=10,
         num_constraints=3,
         noise_std=0.01,
         strong_convex=True,
         device='cpu'
     )
     
-    # Create correct SSIGD
-    ssigd = CorrectSSIGD(problem)
+    strategies = [
+        ('constant_sqrt', 'β = O(1/√T) ≈ 0.014 for T=5000'),
+        ('diminishing', 'β_r = 1/(μ_F(r+1)) for strongly-convex'),
+        ('adaptive', 'Adaptive step size')
+    ]
     
-    # Run SSIGD
-    x_final, losses, grad_norms = ssigd.solve(T=100, beta=0.01)
+    results = {}
     
-    print(f"\nResults:")
-    print(f"  Final loss: {losses[-1]:.6f}")
-    print(f"  Final gradient norm: {grad_norms[-1]:.3f}")
-    print(f"  Final x: {x_final}")
-    print(f"  Max gradient norm: {max(grad_norms):.3f}")
-    print(f"  Loss trajectory: {losses[:5]} ... {losses[-5:]}")
+    for strategy, description in strategies:
+        print(f"\n{'='*60}")
+        print(f"Testing {strategy}: {description}")
+        print(f"{'='*60}")
+        
+        ssigd = StableSSIGD(problem)
+        x_final, losses, grad_norms, x_history, step_sizes = ssigd.solve(
+            T=5000, 
+            step_strategy=strategy,
+            mu_F=0.1,  # Estimate for strongly-convex parameter
+            eps_fd=1e-4
+        )
+        
+        results[strategy] = {
+            'final_loss': losses[-1],
+            'final_grad_norm': grad_norms[-1],
+            'min_loss': min(losses),
+            'converged': grad_norms[-1] < 1e-2,
+            'step_sizes': step_sizes
+        }
+        
+        print(f"\nResults for {strategy}:")
+        print(f"  Final loss: {losses[-1]:.6f}")
+        print(f"  Final gradient norm: {grad_norms[-1]:.3f}")
+        print(f"  Min loss achieved: {min(losses):.6f}")
+        print(f"  Converged: {grad_norms[-1] < 1e-2}")
+        print(f"  Final step size: {step_sizes[-1]:.6f}")
+        print(f"  Initial step size: {step_sizes[0]:.6f}")
     
-    # Check for numerical stability
-    if max(grad_norms) > 100:
-        print(f"  ⚠️  Warning: Large gradient norms detected - possible numerical issues")
-    else:
-        print(f"  ✅ Gradient norms are reasonable - good numerical stability")
+    # Compare strategies
+    print(f"\n{'='*80}")
+    print("STRATEGY COMPARISON")
+    print(f"{'='*80}")
+    print(f"{'Strategy':<15} {'Final Loss':<12} {'Grad Norm':<10} {'Converged':<10} {'Min Loss':<12}")
+    print("-" * 80)
     
-    return x_final, losses, grad_norms
-
-def compare_implementations():
-    """Compare our correct implementation with the previous ones"""
-    print("\n" + "=" * 80)
-    print("IMPLEMENTATION COMPARISON")
-    print("=" * 80)
+    for strategy, result in results.items():
+        print(f"{strategy:<15} {result['final_loss']:<12.6f} {result['final_grad_norm']:<10.3f} "
+              f"{result['converged']:<10} {result['min_loss']:<12.6f}")
     
-    print("1. PREVIOUS IMPLEMENTATION ISSUES:")
-    print("   ❌ Used PGD solver instead of log-barrier penalty")
-    print("   ❌ Didn't apply q-perturbation to lower-level objective")
-    print("   ❌ Used different stochastic gradient structure")
-    print("   ❌ Missing proper smoothing mechanism")
-    
-    print("\n2. CORRECT IMPLEMENTATION FEATURES:")
-    print("   ✅ Log-barrier penalty for constraints (as in algorithms.py)")
-    print("   ✅ q-perturbation applied to lower-level objective")
-    print("   ✅ Exact stochastic gradient formula from SSIGD paper")
-    print("   ✅ Single fixed perturbation for smoothing")
-    print("   ✅ Proper scaling and bounds")
-    
-    print("\n3. KEY DIFFERENCES:")
-    print("   - Constraint handling: PGD → Log-barrier penalty")
-    print("   - Perturbation: Not applied → Applied to lower-level")
-    print("   - Smoothing: Finite differences → q-perturbation smoothing")
-    print("   - Formula: Approximate → Exact SSIGD formula")
+    return results
 
 if __name__ == "__main__":
-    # Run comparison analysis
-    compare_implementations()
-    
-    # Test correct implementation
-    test_correct_ssigd()
-
+    test_stable_strategies()

@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "C:\Users\ren\Documents\bilvel3\exact_sbatch_vs_dsblo.py", line 454, in <module>
+    results = run_exact_sbatch_vs_dsblo()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\Documents\bilvel3\exact_sbatch_vs_dsblo.py", line 254, in run_exact_sbatch_vs_dsblo
+    x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd, x_hist_ssigd = ssigd_algo.solve(T=args.T, beta=args.eta, x0=x0)
+                                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\Documents\bilvel3\ssigd_correct_final.py", line 142, in solve
+    y_plus = self.solve_lower_level_with_perturbation(x_plus, self.q)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\Documents\bilvel3\ssigd_correct_final.py", line 43, in solve_lower_level_with_perturbation
+    obj.backward()
+  File "C:\Users\ren\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\_tensor.py", line 581, in backward
+    torch.autograd.backward(
+  File "C:\Users\ren\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\autograd\__init__.py", line 347, in backward
+    _engine_run_backward(
+  File "C:\Users\ren\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\autograd\graph.py", line 825, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

@@ -1,0 +1,36 @@
+C:\Users\ren\AppData\Local\Programs\Python\Python312\Lib\site-packages\cupy\_environment.py:215: UserWarning: CUDA path could not be detected. Set CUDA_PATH environment variable if CuPy fails to load.
+  warnings.warn(
+C:\Users\ren\Documents\bilvel3\problem.py:124: UserWarning: The use of `x.T` on tensors of dimension other than 2 to reverse their shape is deprecated and it will throw an error in a future release. Consider `x.mT` to transpose batches of matrices or `x.permute(*torch.arange(x.ndim - 1, -1, -1))` to reverse the dimensions of a tensor. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\builder\windows\pytorch\aten\src\ATen\native\TensorShape.cpp:3687.)
+  f = 0.5 * x.T @ Q_upper_noisy @ x + self.c_upper.T @ x + 0.5 * y.T @ self.P @ y + x.T @ self.P @ y
+Traceback (most recent call last):
+  File "C:\Users\ren\Documents\bilvel3\compare_ssigd_strategies.py", line 198, in <module>
+    results = run_strategy_comparison()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\Documents\bilvel3\compare_ssigd_strategies.py", line 82, in run_strategy_comparison
+    x_final, losses, grad_norms, x_history, step_sizes = ssigd.solve(
+                                                         ^^^^^^^^^^^^
+  File "C:\Users\ren\Documents\bilvel3\ssigd_stable_debug.py", line 175, in solve
+    y_opt, _ = self.prob.solve_lower_level(x)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\Documents\bilvel3\problem.py", line 172, in solve_lower_level
+    return self._solve_accurate(x, alpha, max_iter, tol)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\Documents\bilvel3\problem.py", line 184, in _solve_accurate
+    y_opt, lambda_opt, info = solver.solve_lower_level_accurate(x, alpha, max_iter, tol)
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\Documents\bilvel3\accurate_lower_level_solver.py", line 45, in solve_lower_level_accurate
+    y_opt, lambda_opt, info = self._solve_cvxpy(x, tol)
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\Documents\bilvel3\accurate_lower_level_solver.py", line 65, in _solve_cvxpy
+    objective = cp.Minimize(0.5 * cp.quad_form(y_cp, Q_lower_np) + c_lower_np @ y_cp)
+                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~
+  File "C:\Users\ren\AppData\Local\Programs\Python\Python312\Lib\site-packages\cvxpy\expressions\expression.py", line 51, in cast_op
+    return binary_op(self, other)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\AppData\Local\Programs\Python\Python312\Lib\site-packages\cvxpy\expressions\expression.py", line 632, in __add__
+    return cvxtypes.add_expr()([self, other])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ren\AppData\Local\Programs\Python\Python312\Lib\site-packages\cvxpy\atoms\affine\add_expr.py", line 32, in __init__
+    def __init__(self, arg_groups: Iterable[Expression]) -> None:
+
+KeyboardInterrupt
