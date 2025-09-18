@@ -159,17 +159,10 @@ def run_exact_sbatch_vs_dsblo():
     print(f"Starting point: {x0}")
     print()
     
-    # Compute initial upper-level loss and reference gradient
+    # Compute initial upper-level loss
     y0_star, _ = problem.solve_lower_level(x0)
     initial_ul_loss = problem.upper_objective(x0, y0_star).item()
     print(f"Initial UL loss: {initial_ul_loss:.6f}")
-    
-    # Compute reference gradient for fair comparison (using F2CSA's Algorithm 1)
-    algorithm1 = F2CSAAlgorithm1Final(problem)
-    oracle_result_0 = algorithm1.oracle_sample(x0, args.alpha, args.Ng)
-    g_0 = oracle_result_0[0] if isinstance(oracle_result_0, tuple) else oracle_result_0
-    reference_grad_norm = torch.norm(g_0).item()
-    print(f"Reference gradient norm: {reference_grad_norm:.6f}")
     print()
     
     f2csa_results = None
@@ -180,7 +173,6 @@ def run_exact_sbatch_vs_dsblo():
         print("=" * 50)
         
         algorithm2 = F2CSAAlgorithm2Working(problem)
-        algorithm2.reference_grad_norm = reference_grad_norm  # Set reference for normalization
         delta = args.alpha ** 3
         
         f2csa_results = algorithm2.optimize(
@@ -204,7 +196,6 @@ def run_exact_sbatch_vs_dsblo():
     
     if args.dsblo_opt == 'II':
         dsblo = DSBLOOptII(problem)
-        dsblo.reference_grad_norm = reference_grad_norm  # Set reference for normalization
         dsblo_results = dsblo.optimize(
             x0, args.T, args.alpha,
             sigma=args.dsblo_sigma,
@@ -256,7 +247,6 @@ def run_exact_sbatch_vs_dsblo():
         print("RUNNING SSIGD")
         print("=" * 50)
         ssigd_algo = CorrectSSIGD(problem)
-        ssigd_algo.reference_grad_norm = reference_grad_norm  # Set reference for normalization
         x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd = ssigd_algo.solve(T=args.T, beta=args.eta, x0=x0)
         ssigd_results = {
             'final_ul_loss': ul_losses_ssigd[-1],

@@ -55,8 +55,7 @@ class CorrectSSIGD:
             obj.backward()
             optimizer.step()
             
-            # Continue for full iterations to ensure proper convergence
-            # Note: Early stopping removed to ensure consistent behavior
+            # Continue for full iterations (no early stopping)
         
         return y.detach()
     
@@ -107,7 +106,7 @@ class CorrectSSIGD:
             x.requires_grad_(False)
             return torch.zeros_like(x)
     
-    def solve(self, T=100, beta=0.01, alpha=0.05, x0=None):
+    def solve(self, T=1000, beta=0.01, x0=None):
         """
         Main SSIGD algorithm following the paper exactly
         """
@@ -129,32 +128,25 @@ class CorrectSSIGD:
                 # Compute stochastic implicit gradient
                 grad = self.compute_stochastic_implicit_gradient(x, xi_upper, zeta_lower)
                 
-                # Normalize first gradient to reference norm for fair comparison
-                if t == 0 and hasattr(self, 'reference_grad_norm'):
-                    current_norm = torch.norm(grad).item()
-                    if current_norm > 1e-10:  # Avoid division by zero
-                        grad = grad * (self.reference_grad_norm / current_norm)
-                
                 # Track progress (evaluate UL at current x BEFORE the update so t=0 matches x0)
-                # Log every iteration for better convergence tracking
-                y_opt, _ = self.prob.solve_lower_level(x)
-                loss = self.prob.upper_objective(x, y_opt).item()
-                losses.append(loss)
-                grad_norm = torch.norm(grad).item()
-                hypergrad_norms.append(grad_norm)
-                
-                # Print progress every 10 iterations or first 5 iterations
-                if t % 10 == 0 or t < 5:
+                if t % 1 == 0:
+                    # Use proper problem objective instead of hardcoded formula
+                    y_opt, _ = self.prob.solve_lower_level(x)
+                    loss = self.prob.upper_objective(x, y_opt).item()
+                    losses.append(loss)
+                    grad_norm = torch.norm(grad).item()
+                    hypergrad_norms.append(grad_norm)
+                    
                     print(f"  t={t:3d}: loss={loss:.6f}, grad_norm={grad_norm:.3f}")
-                
-                # Check for numerical issues but don't stop early - just warn
-                if torch.isnan(grad).any() or torch.isinf(grad).any():
-                    print(f"    Warning: Invalid gradient at iteration {t} - continuing with zero gradient")
-                    grad = torch.zeros_like(grad)
-                
-                # Check for explosion but don't stop early - just warn
-                if grad_norm > 1000:
-                    print(f"    Warning: Large gradient norm {grad_norm:.2e} at iteration {t} - continuing")
+                    
+                    # Check for numerical issues (warn but continue)
+                    if torch.isnan(grad).any() or torch.isinf(grad).any():
+                        print(f"    Warning: Invalid gradient at iteration {t}, setting to zero")
+                        grad = torch.zeros_like(grad)
+                    
+                    # Check for explosion (warn but continue)
+                    if grad_norm > 1000:
+                        print(f"    Warning: Large gradient norm {grad_norm:.2e} at iteration {t}")
                 
                 # Update with adaptive learning rate (AFTER logging)
                 lr_t = beta / (1 + 0.0001 * t)
