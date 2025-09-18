@@ -71,7 +71,24 @@ class AccurateLowerLevelSolver:
             constraints = [A_np @ x_np + B_np @ y_cp - b_np <= 0]
             
             prob = cp.Problem(objective, constraints)
-            prob.solve(verbose=False)
+            # Try faster solvers in order of preference
+            solvers_to_try = [cp.CLARABEL, cp.OSQP, cp.CVXOPT, cp.SCS]
+            solved = False
+            
+            for solver in solvers_to_try:
+                try:
+                    prob.solve(solver=solver, verbose=False)
+                    if prob.status in ["optimal", "optimal_near"]:
+                        print(f"  Using solver: {solver}")
+                        solved = True
+                        break
+                except Exception as e:
+                    print(f"  Solver {solver} failed: {e}")
+                    continue
+            
+            if not solved:
+                # Fallback to default solver
+                prob.solve(verbose=False)
             
             if prob.status in ["optimal", "optimal_near"]:
                 y_opt_np = y_cp.value
