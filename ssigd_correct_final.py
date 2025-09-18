@@ -112,6 +112,7 @@ class CorrectSSIGD:
              torch.randn(self.prob.dim, device=self.device, dtype=self.dtype) * 0.1)
         losses = []
         hypergrad_norms = []
+        x_history = []
         
         print(f"Correct SSIGD: T={T}, beta={beta:.4f}")
         print(f"  Following exact formula: ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)")
@@ -125,6 +126,8 @@ class CorrectSSIGD:
         step_cap = 0.05  # cap on ||Δx|| per iteration
         for t in range(T):
             try:
+                # record trajectory before update (to align with UL at current x)
+                x_history.append(x.clone().detach())
                 # Precompute shared lower-level solution for this x
                 shared_y_hat = self.solve_lower_level_with_perturbation(x, self.q)
 
@@ -202,7 +205,10 @@ class CorrectSSIGD:
                 print(f"  Error at iteration {t}: {str(e)[:50]}")
                 continue
         
-        return x, losses, hypergrad_norms
+        # ensure final point captured
+        if len(x_history) == 0 or not torch.equal(x_history[-1], x.detach()):
+            x_history.append(x.clone().detach())
+        return x, losses, hypergrad_norms, x_history
 
 def test_correct_ssigd():
     """Test the correct SSIGD implementation"""
