@@ -29,31 +29,35 @@ fi
 WORK_DIR=${SLURM_SUBMIT_DIR:-$(pwd)}
 cd "$WORK_DIR"
 
-# Ensure Python can find site packages and sibling legacy repo
+# Ensure Python can find site packages and legacy repo
 export PYTHONPATH=/storage/scratch1/6/cphan36/python_packages/lib/python3.10/site-packages:$PYTHONPATH
-export PYTHONPATH=$(cd "$WORK_DIR/.." && pwd)/BilevelLinearConstraints:$PYTHONPATH
+export PYTHONPATH=$WORK_DIR/BilevelLinearConstraints:$PYTHONPATH
 
 # Echo task config
 echo "Running noise test with 5k iterations"
 echo "WORK_DIR=$WORK_DIR"
 echo "PYTHONPATH=$PYTHONPATH"
 
-# Preflight: verify legacy algorithms.py is importable
+# Preflight: verify main script can run (legacy algorithms.py is optional)
 python - <<'PY'
 import sys, importlib.util, traceback
-print('Preflight: checking import of algorithms.DsBlo...')
-spec = importlib.util.find_spec('algorithms')
-print('find_spec algorithms ->', bool(spec), 'from', getattr(spec, 'origin', None))
+print('Preflight: checking main script imports...')
 try:
-    from algorithms import DsBlo  # noqa: F401
-    print('Preflight OK: legacy DsBlo importable')
-except Exception:
-    print('Preflight FAILED: could not import algorithms.DsBlo')
+    # Test main imports
+    from problem import StronglyConvexBilevelProblem
+    from f2csa_algorithm_corrected_final import F2CSAAlgorithm1Final
+    from f2csa_algorithm2_working import F2CSAAlgorithm2Working
+    from dsblo_conservative import DSBLOConservative
+    from dsblo_optII import DSBLOOptII
+    from ssigd_correct_final import CorrectSSIGD
+    print('Preflight OK: main script imports successful')
+except Exception as e:
+    print('Preflight FAILED: could not import main modules')
     traceback.print_exc()
     sys.exit(2)
 PY
 if [[ $? -ne 0 ]]; then
-  echo "Aborting task due to missing legacy algorithms.py"
+  echo "Aborting task due to missing main modules"
   exit 2
 fi
 

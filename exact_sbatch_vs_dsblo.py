@@ -20,28 +20,31 @@ import warnings
 
 # Legacy DsBlo adapter imports
 import sys, os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'BilevelLinearConstraints'))
 import numpy as np
-try:
-    from algorithms import DsBlo as LegacyDsBlo
-except Exception:
-    LegacyDsBlo = None
 
-# Try additional known locations for algorithms.py if not found
+# Try multiple paths to find algorithms.py
+candidate_paths = [
+    os.path.join(os.path.dirname(__file__), 'BilevelLinearConstraints'),  # Same directory
+    os.path.join(os.path.dirname(__file__), '..', 'BilevelLinearConstraints'),  # Parent directory
+    r'C:\Users\phant\OneDrive\Documents\BilevelLinearConstraints\BilevelLinearConstraints'  # Windows path
+]
+
+LegacyDsBlo = None
+for p in candidate_paths:
+    if os.path.isdir(p) and p not in sys.path:
+        sys.path.append(p)
+        try:
+            from algorithms import DsBlo as LegacyDsBlo  # type: ignore
+            print(f"Successfully imported algorithms.DsBlo from: {p}")
+            break
+        except Exception as e:
+            print(f"Failed to import from {p}: {e}")
+            LegacyDsBlo = None
+            continue
+
 if LegacyDsBlo is None:
-    candidate_paths = [
-        os.path.join(os.path.dirname(__file__), '..', 'BilevelLinearConstraints'),
-        r'C:\Users\phant\OneDrive\Documents\BilevelLinearConstraints\BilevelLinearConstraints'
-    ]
-    for p in candidate_paths:
-        if p not in sys.path and os.path.isdir(p):
-            sys.path.append(p)
-            try:
-                from algorithms import DsBlo as LegacyDsBlo  # type: ignore
-                break
-            except Exception:
-                LegacyDsBlo = None
-                continue
+    print("Warning: Could not import algorithms.DsBlo - legacy DS-BLO will not be available")
+    print("This is normal if the legacy dependencies are not installed")
 
 class LegacyNoisyProblemAdapter:
     def __init__(self, prob):
