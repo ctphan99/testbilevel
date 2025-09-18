@@ -1,8 +1,11 @@
 #!/bin/bash
+# Phoenix Slurm batch script for noise test with 5k iterations
+# Runs exact_sbatch_vs_dsblo.py with specific parameters
+
 #SBATCH -J noise-test-5k
 #SBATCH -o logs/%x-%A.out
 #SBATCH -e logs/%x-%A.err
-#SBATCH -t 2:00:00
+#SBATCH -t 12:00:00
 #SBATCH -A gts-kwang692
 #SBATCH --qos=inferno
 #SBATCH --partition=cpu-amd
@@ -54,7 +57,7 @@ if [[ $? -ne 0 ]]; then
   exit 2
 fi
 
-# Run the comparison with specified parameters
+# Run the specific test command
 srun -n 1 python exact_sbatch_vs_dsblo.py \
   --T 5000 \
   --alpha 0.05 \
@@ -65,4 +68,4 @@ srun -n 1 python exact_sbatch_vs_dsblo.py \
   --warm-ll \
   --plot-name noise_test_5k.png
 
-echo "Job completed successfully!"
+echo "Task completed successfully"

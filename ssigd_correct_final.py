@@ -117,7 +117,6 @@ class CorrectSSIGD:
              torch.randn(self.prob.dim, device=self.device, dtype=self.dtype) * 0.1)
         losses = []
         hypergrad_norms = []
-        x_history = []
         
         print(f"Correct SSIGD: T={T}, beta={beta:.4f}")
         print(f"  Following exact formula: ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)")
@@ -156,14 +155,11 @@ class CorrectSSIGD:
                 lr_t = beta / (1 + 0.0001 * t)
                 x = x - lr_t * grad
                 
-                # Record x at each iteration for trajectory plotting
-                x_history.append(x.clone().detach())
-                
             except Exception as e:
                 print(f"  Error at iteration {t}: {str(e)[:50]}")
                 continue
         
-        return x, losses, hypergrad_norms, x_history
+        return x, losses, hypergrad_norms
 
 def test_correct_ssigd():
     """Test the correct SSIGD implementation"""
