@@ -143,11 +143,18 @@ class DSBLOOptII:
             noise_up_track, _ = self.problem._sample_instance_noise()
             y_star, _ = self.problem.solve_lower_level(x)
             ul_losses.append(self.problem.upper_objective(x, y_star, noise_up_track).item())
+        # Normalize initial gradient to reference norm for fair comparison
+        if hasattr(self, 'reference_grad_norm'):
+            current_norm = torch.norm(m).item()
+            if current_norm > 1e-10:  # Avoid division by zero
+                m = m * (self.reference_grad_norm / current_norm)
+        
         hypergrad_norms.append(torch.norm(m).item())
 
         best_ul = float('inf')
         since_best = 0
         for t in range(1, T + 1):
+            
             grad_norm = torch.norm(m)
             eta = 1.0 / (gamma1 * grad_norm + gamma2)
             eta = min(eta, eta_cap)

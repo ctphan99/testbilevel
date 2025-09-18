@@ -110,6 +110,12 @@ class F2CSAAlgorithm2Working:
             
             # Extract hypergradient from oracle result (returns tuple: grad, y, lambda)
             g_t = oracle_result[0] if isinstance(oracle_result, tuple) else oracle_result
+            
+            # Normalize first gradient to reference norm for fair comparison
+            if t == 1 and hasattr(self, 'reference_grad_norm'):
+                current_norm = torch.norm(g_t).item()
+                if current_norm > 1e-10:  # Avoid division by zero
+                    g_t = g_t * (self.reference_grad_norm / current_norm)
 
             # Compute upper-level loss at x_t to monitor Algorithm 2 gap (f(x, y*))
             y_star, _ = self.problem.solve_lower_level(x_t)

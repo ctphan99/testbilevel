@@ -129,6 +129,12 @@ class CorrectSSIGD:
                 # Compute stochastic implicit gradient
                 grad = self.compute_stochastic_implicit_gradient(x, xi_upper, zeta_lower)
                 
+                # Normalize first gradient to reference norm for fair comparison
+                if t == 0 and hasattr(self, 'reference_grad_norm'):
+                    current_norm = torch.norm(grad).item()
+                    if current_norm > 1e-10:  # Avoid division by zero
+                        grad = grad * (self.reference_grad_norm / current_norm)
+                
                 # Track progress (evaluate UL at current x BEFORE the update so t=0 matches x0)
                 # Log every iteration for better convergence tracking
                 y_opt, _ = self.prob.solve_lower_level(x)
