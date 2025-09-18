@@ -55,9 +55,8 @@ class CorrectSSIGD:
             obj.backward()
             optimizer.step()
             
-            # Early stopping if feasible
-            if torch.all(constraints <= 0):
-                break
+            # Continue for full iterations to ensure proper convergence
+            # Note: Early stopping removed to ensure consistent behavior
         
         return y.detach()
     
@@ -117,7 +116,6 @@ class CorrectSSIGD:
              torch.randn(self.prob.dim, device=self.device, dtype=self.dtype) * 0.1)
         losses = []
         hypergrad_norms = []
-        x_history = []
         
         print(f"Correct SSIGD: T={T}, beta={beta:.4f}")
         print(f"  Following exact formula: ∇F(x;ξ) = ∇_x f(x,ŷ(x);ξ) + [∇ŷ*(x)]^T ∇_y f(x,ŷ(x);ξ)")
@@ -132,38 +130,35 @@ class CorrectSSIGD:
                 grad = self.compute_stochastic_implicit_gradient(x, xi_upper, zeta_lower)
                 
                 # Track progress (evaluate UL at current x BEFORE the update so t=0 matches x0)
+                # Log every iteration for better convergence tracking
+                y_opt, _ = self.prob.solve_lower_level(x)
+                loss = self.prob.upper_objective(x, y_opt).item()
+                losses.append(loss)
+                grad_norm = torch.norm(grad).item()
+                hypergrad_norms.append(grad_norm)
+                
+                # Print progress every 10 iterations or first 5 iterations
                 if t % 10 == 0 or t < 5:
-                    # Use proper problem objective instead of hardcoded formula
-                    y_opt, _ = self.prob.solve_lower_level(x)
-                    loss = self.prob.upper_objective(x, y_opt).item()
-                    losses.append(loss)
-                    grad_norm = torch.norm(grad).item()
-                    hypergrad_norms.append(grad_norm)
-                    
                     print(f"  t={t:3d}: loss={loss:.6f}, grad_norm={grad_norm:.3f}")
-                    
-                    # Check for numerical issues
-                    if torch.isnan(grad).any() or torch.isinf(grad).any():
-                        print(f"    Warning: Invalid gradient at iteration {t}")
-                        break
-                    
-                    # Check for explosion
-                    if grad_norm > 1000:
-                        print(f"    Warning: Large gradient norm {grad_norm:.2e} at iteration {t}")
-                        break
+                
+                # Check for numerical issues but don't stop early - just warn
+                if torch.isnan(grad).any() or torch.isinf(grad).any():
+                    print(f"    Warning: Invalid gradient at iteration {t} - continuing with zero gradient")
+                    grad = torch.zeros_like(grad)
+                
+                # Check for explosion but don't stop early - just warn
+                if grad_norm > 1000:
+                    print(f"    Warning: Large gradient norm {grad_norm:.2e} at iteration {t} - continuing")
                 
                 # Update with adaptive learning rate (AFTER logging)
                 lr_t = beta / (1 + 0.0001 * t)
                 x = x - lr_t * grad
                 
-                # Record x at each iteration for trajectory plotting
-                x_history.append(x.clone().detach())
-                
             except Exception as e:
                 print(f"  Error at iteration {t}: {str(e)[:50]}")
                 continue
         
-        return x, losses, hypergrad_norms, x_history
+        return x, losses, hypergrad_norms
 
 def test_correct_ssigd():
     """Test the correct SSIGD implementation"""

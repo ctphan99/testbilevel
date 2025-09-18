@@ -88,6 +88,17 @@ class F2CSAAlgorithm2Working:
         print("Starting optimization...")
         print("-" * 50)
         
+        # In F2CSA, add before the main loop:
+        # Compute initial gradient at x0 for fair comparison
+        print("Computing initial gradient at x0...")
+        y0_star, _ = self.problem.solve_lower_level(x0)
+        oracle_result_0 = self.algorithm1.oracle_sample(x0, alpha, N_g)
+        g_0 = oracle_result_0[0] if isinstance(oracle_result_0, tuple) else oracle_result_0
+        hypergrad_norms.append(torch.norm(g_0).item())
+        ul_losses.append(self.problem.upper_objective(x0, y0_star).item())
+        print(f"Initial gradient norm: {torch.norm(g_0).item():.6f}")
+        print(f"Initial UL loss: {ul_losses[0]:.6f}")
+        
         # Main optimization loop following Algorithm 2 exactly
         for t in range(1, T + 1):
             # Step 1: Sample s_t ~ Unif[0,1] and compute z_t = x_{t-1} + s_t * Δ_t
