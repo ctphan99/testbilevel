@@ -44,69 +44,127 @@ class ResNet18(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-class LowerLevelBoxOptimizer:
-    """
-    Optimizer for lower-level adversarial variable y under L-infinity box
-    constraint: -epsilon <= y <= epsilon.
+class BilevelOptimizer:
+    def step(self, model, inputs, targets, epsilon):
+        raise NotImplementedError
 
-    Provides a simple projected (Adam) gradient method that can be reused
-    independently of the DS-BLO trainer.
-    """
-    def __init__(self, epsilon: float, steps: int = 10, lr: float = 1e-2,
-                 grad_clip: float = 5.0, use_mixed_precision: bool = False,
-                 device: str = 'cpu'):
-        self.epsilon = float(epsilon)
-        self.steps = int(steps)
-        self.lr = float(lr)
-        self.grad_clip = float(grad_clip)
-        self.device = device
-        self.use_mixed_precision = use_mixed_precision
-        self.scaler = torch.cuda.amp.GradScaler() if (use_mixed_precision and device == 'cuda') else None
+class PGDLowerLevel:
+    def __init__(self, epsilon: float, steps: int = 10, lr: float = 0.01):
+        self.epsilon = epsilon
+        self.steps = steps
+        self.lr = lr
 
-    def optimize(self, objective_fn, inputs: torch.Tensor, targets: torch.Tensor,
-                 q: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        Runs projected gradient optimization on y for the given objective.
-        Args:
-            objective_fn: callable (x, y, q, inputs, targets) -> scalar loss
-            inputs, targets: batch tensors
-            q: optional perturbation vector used by the objective
-        Returns:
-            y_star (torch.Tensor): optimized perturbations in [-epsilon, epsilon]
-        """
-        y = torch.zeros_like(inputs, requires_grad=True, device=self.device)
-        opt = optim.Adam([y], lr=self.lr)
-
+    def solve(self, model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor, q: Optional[torch.Tensor] = None) -> torch.Tensor:
+        y = torch.zeros_like(inputs, requires_grad=True, device=inputs.device)
+        opt = torch.optim.SGD([y], lr=self.lr)
         for _ in range(self.steps):
-            opt.zero_grad()
-            if self.scaler is not None:
-                with torch.cuda.amp.autocast():
-                    loss = objective_fn(None, y, q, inputs, targets)
-                self.scaler.scale(loss).backward()
-                self.scaler.unscale_(opt)
-            else:
-                loss = objective_fn(None, y, q, inputs, targets)
-                loss.backward()
-
-            torch.nn.utils.clip_grad_norm_([y], self.grad_clip)
-            if self.scaler is not None:
-                self.scaler.step(opt)
-                self.scaler.update()
-            else:
-                opt.step()
-
+            opt.zero_grad(set_to_none=True)
+            loss = F.cross_entropy(model(inputs + y), targets)
+            if q is not None:
+                loss = loss + torch.dot(q.flatten(), y.flatten())
+            loss.backward()
+            opt.step()
             with torch.no_grad():
-                y.data = torch.clamp(y.data, -self.epsilon, self.epsilon)
-
+                y.data.clamp_(-self.epsilon, self.epsilon)
         return y.detach()
+
+class DSBLOOptimizer(BilevelOptimizer):
+    def __init__(self, beta: float = 0.8, gamma1: float = 1.0, gamma2: float = 1.0, eta_cap: float = 1e-3,
+                 q_std: float = 1e-4, ll_steps: int = 10, ll_lr: float = 0.01):
+        self.beta = beta
+        self.gamma1 = gamma1
+        self.gamma2 = gamma2
+        self.eta_cap = eta_cap
+        self.q_std = q_std
+        self.ll_steps = ll_steps
+        self.ll_lr = ll_lr
+        self.momentum_flat: Optional[torch.Tensor] = None
+
+    @torch.no_grad()
+    def step(self, model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor, epsilon: float):
+        q = torch.randn_like(inputs) * self.q_std
+        ll = PGDLowerLevel(epsilon=epsilon, steps=self.ll_steps, lr=self.ll_lr)
+        y_star = ll.solve(model, inputs, targets, q=q)
+        loss = F.cross_entropy(model(inputs + y_star), targets)
+        grads = torch.autograd.grad(loss, model.parameters(), create_graph=False, retain_graph=False)
+        g_flat = torch.cat([g.flatten() for g in grads])
+        if self.momentum_flat is None:
+            self.momentum_flat = torch.zeros_like(g_flat)
+        self.momentum_flat = self.beta * self.momentum_flat + (1.0 - self.beta) * g_flat
+        eta = 1.0 / (self.gamma1 * torch.norm(self.momentum_flat) + self.gamma2)
+        eta = float(min(eta, self.eta_cap))
+        i = 0
+        for p in model.parameters():
+            n = p.numel()
+            p.add_(-eta * self.momentum_flat[i:i + n].view_as(p))
+            i += n
+        return {"step_size": eta, "loss": float(loss.item())}
+
+class F2CSAOptimizer(BilevelOptimizer):
+    def __init__(self, alpha: float = 0.6, Ng: int = 32, eta: float = 2e-4, ll_steps: int = 10, ll_lr: float = 0.01):
+        self.alpha = alpha
+        self.Ng = Ng
+        self.eta = eta
+        self.ll_steps = ll_steps
+        self.ll_lr = ll_lr
+
+    @torch.no_grad()
+    def step(self, model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor, epsilon: float):
+        ll = PGDLowerLevel(epsilon=epsilon, steps=self.ll_steps, lr=self.ll_lr)
+        y_star = ll.solve(model, inputs, targets)
+        g_accum = None
+        for _ in range(self.Ng):
+            loss = F.cross_entropy(model(inputs + y_star), targets)
+            grads = torch.autograd.grad(loss, model.parameters(), create_graph=False, retain_graph=False)
+            g_flat = torch.cat([g.flatten() for g in grads])
+            g_accum = g_flat if g_accum is None else g_accum + g_flat
+        g_hat = g_accum / float(self.Ng)
+        i = 0
+        for p in model.parameters():
+            n = p.numel()
+            p.add_(-self.eta * g_hat[i:i + n].view_as(p))
+            i += n
+        return {"step_size": float(self.eta), "loss": float(loss.item())}
+
+class SSIGDOptimizer(BilevelOptimizer):
+    def __init__(self, eta: float = 1e-3, ll_steps: int = 10, ll_lr: float = 0.01, goldstein: bool = False, noise_std: float = 1e-4):
+        self.eta = eta
+        self.ll_steps = ll_steps
+        self.ll_lr = ll_lr
+        self.goldstein = goldstein
+        self.noise_std = noise_std
+
+    @torch.no_grad()
+    def step(self, model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor, epsilon: float):
+        ll = PGDLowerLevel(epsilon=epsilon, steps=self.ll_steps, lr=self.ll_lr)
+        if self.goldstein:
+            M = 8
+            grads_accum = None
+            for _ in range(M):
+                y_star = ll.solve(model, inputs, targets)
+                loss = F.cross_entropy(model(inputs + y_star), targets)
+                grads = torch.autograd.grad(loss, model.parameters(), create_graph=False, retain_graph=False)
+                g_flat = torch.cat([g.flatten() for g in grads])
+                grads_accum = g_flat if grads_accum is None else grads_accum + g_flat
+            g = grads_accum / float(M)
+        else:
+            y_star = ll.solve(model, inputs, targets)
+            loss = F.cross_entropy(model(inputs + y_star), targets)
+            grads = torch.autograd.grad(loss, model.parameters(), create_graph=False, retain_graph=False)
+            g = torch.cat([g.flatten() for g in grads])
+        i = 0
+        for p in model.parameters():
+            n = p.numel()
+            p.add_(-self.eta * g[i:i + n].view_as(p))
+            i += n
+        return {"step_size": float(self.eta), "loss": float(loss.item())}
 
 class DSBLOAdversarialTraining:
     """
     DS-BLO implementation for adversarial training with linear constraints
     """
     
-    def __init__(self, model, epsilon=8/255, device='cuda' if torch.cuda.is_available() else 'cpu',
-                 ll_steps: int = 10, ll_lr: float = 1e-2):
+    def __init__(self, model, epsilon=8/255, device='cuda' if torch.cuda.is_available() else 'cpu'):
         self.device = device
         self.epsilon = epsilon  # Attack budget (L∞ constraint)
         
@@ -131,18 +189,7 @@ class DSBLOAdversarialTraining:
         
         # Perturbation parameters
         self.perturbation_std = 1e-4  # Standard deviation for q perturbation
-        # Keep legacy field for backward compatibility, but route through optimizer
-        self.inner_steps = int(ll_steps)
-
-        # Lower-level box optimizer
-        self.ll_optimizer = LowerLevelBoxOptimizer(
-            epsilon=self.epsilon,
-            steps=ll_steps,
-            lr=ll_lr,
-            grad_clip=self.grad_clip,
-            use_mixed_precision=(self.scaler is not None),
-            device=self.device,
-        )
+        self.inner_steps = 10  # Steps for solving lower-level problem
         
         # Training history
         self.train_losses = []
@@ -178,8 +225,39 @@ class DSBLOAdversarialTraining:
         Solve lower-level problem: min_y g(x,y) + q^T y subject to ||y||_∞ ≤ ε
         Using projected gradient descent with GPU optimizations
         """
-        # Delegate to reusable box optimizer for clarity and reusability
-        return self.ll_optimizer.optimize(self.lower_level_objective, inputs, targets, q)
+        batch_size, channels, height, width = inputs.shape
+        y = torch.zeros_like(inputs, requires_grad=True, device=self.device)
+        
+        # Use Adam optimizer for inner problem
+        inner_optimizer = optim.Adam([y], lr=0.01)
+        
+        for step in range(self.inner_steps):
+            inner_optimizer.zero_grad()
+            
+            # Use mixed precision if available
+            if self.scaler is not None:
+                with torch.cuda.amp.autocast():
+                    loss = self.lower_level_objective(None, y, q, inputs, targets)
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(inner_optimizer)
+            else:
+                loss = self.lower_level_objective(None, y, q, inputs, targets)
+                loss.backward()
+            
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_([y], self.grad_clip)
+            
+            if self.scaler is not None:
+                self.scaler.step(inner_optimizer)
+                self.scaler.update()
+            else:
+                inner_optimizer.step()
+            
+            # Project to constraint set: ||y||_∞ ≤ ε
+            with torch.no_grad():
+                y.data = torch.clamp(y.data, -self.epsilon, self.epsilon)
+        
+        return y.detach()
     
     def compute_implicit_gradient(self, inputs, targets, y_star, q):
         """
@@ -345,14 +423,25 @@ def load_cifar_data(dataset='cifar10', batch_size=128, val_split=0.1):
 
 def train_dsblo_adversarial(model, train_loader, val_loader, test_loader, 
                           epochs=100, epsilon=8/255, patience=10, 
-                          save_dir='./dsblo_results'):
+                          save_dir='./dsblo_results', optimizer_name: str = 'dsblo'):
     """
     Train model using DS-BLO adversarial training
     """
     os.makedirs(save_dir, exist_ok=True)
     
-    # Initialize DS-BLO trainer
+    # Initialize DS-BLO trainer (kept for plotting/evaluation utilities)
     trainer = DSBLOAdversarialTraining(model, epsilon=epsilon)
+
+    # Choose optimizer
+    if optimizer_name.lower() == 'dsblo':
+        bilevel_opt: BilevelOptimizer = DSBLOOptimizer(beta=0.8, gamma1=5.0, gamma2=1.0, eta_cap=1e-3, q_std=1e-4,
+                                                       ll_steps=10, ll_lr=0.01)
+    elif optimizer_name.lower() == 'f2csa':
+        bilevel_opt = F2CSAOptimizer(alpha=0.6, Ng=16, eta=2e-4, ll_steps=10, ll_lr=0.01)
+    elif optimizer_name.lower() == 'ssigd':
+        bilevel_opt = SSIGDOptimizer(eta=1e-3, ll_steps=10, ll_lr=0.01, goldstein=True)
+    else:
+        raise ValueError(f"Unknown optimizer_name: {optimizer_name} (choose 'dsblo', 'f2csa', 'ssigd')")
     
     # Training history
     best_val_loss = float('inf')
@@ -373,14 +462,15 @@ def train_dsblo_adversarial(model, train_loader, val_loader, test_loader,
         for batch_idx, (inputs, targets) in enumerate(pbar):
             inputs, targets = inputs.to(trainer.device), targets.to(trainer.device)
             
-            # DS-BLO step
-            step_size = trainer.dsblo_step(inputs, targets)
+            # Bilevel optimizer step (single update on model parameters)
+            stats = bilevel_opt.step(model, inputs, targets, epsilon=epsilon)
+            step_size = stats.get('step_size', 0.0)
             
             # Compute training loss for monitoring
             with torch.no_grad():
                 # Generate adversarial examples for loss computation
                 q = torch.randn_like(inputs) * trainer.perturbation_std
-                y_star = trainer.solve_lower_level(inputs, targets, q)
+                y_star = PGDLowerLevel(epsilon=epsilon, steps=10, lr=0.01).solve(model, inputs, targets, q=q)
                 loss = trainer.upper_level_objective(None, y_star, inputs, targets)
                 train_loss += loss.item()
                 num_batches += 1
@@ -546,10 +636,8 @@ def main():
                        help='Directory to save results')
     parser.add_argument('--device', type=str, default=None, 
                        help='Device to use (cuda/cpu)')
-    parser.add_argument('--ll-steps', type=int, default=10, 
-                       help='Lower-level optimizer steps (box constraint)')
-    parser.add_argument('--ll-lr', type=float, default=1e-2, 
-                       help='Lower-level optimizer learning rate')
+    parser.add_argument('--optimizer', type=str, default='dsblo', 
+                       choices=['dsblo', 'f2csa', 'ssigd'], help='Bilevel optimizer to use')
     
     args = parser.parse_args()
     
@@ -595,8 +683,7 @@ def main():
         epsilon=args.epsilon,
         patience=args.patience,
         save_dir=args.save_dir,
-        ll_steps=args.ll_steps,
-        ll_lr=args.ll_lr
+        optimizer_name=args.optimizer
     )
     
     logger.info("Training completed!")
