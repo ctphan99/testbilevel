@@ -1,6 +1,6 @@
-﻿# Virtual environments
-.venv/
-venv/
+﻿# Large data files
+data/
+src/
 
 # Python cache
 __pycache__/
@@ -8,24 +8,40 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment files
+.env
+.venv/
+venv/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
 # OS files
 .DS_Store
 Thumbs.db
 
-# Plots and large images
+# Plot files
 *.png
+*.pdf
 *.jpg
 *.jpeg
 
-# Keep selected algorithm plots
-!algo2_*.png
+# Model files
+*.pth
+*.pt
+*.pkl
+*.pickle
 
-# Results and logs
-*.json
+# Log files
 *.log
+*.err
 
-# CVXPY solver caches
-cvxpy_*cache*
-
-# Notebooks checkpoints
-.ipynb_checkpoints/
+# Temporary files
+*.tmp
+*.temp
