@@ -1,0 +1,20 @@
+{
+  "final_test_clean_acc": 10.0,
+  "final_test_robust_acc": 0.0,
+  "best_val_loss": 1.608652114868164,
+  "best_robust_acc": 0.0,
+  "epochs_trained": 1,
+  "epsilon": 0.03137254901960784,
+  "train_losses": [
+    2.4562602043151855
+  ],
+  "val_losses": [
+    1.608652114868164
+  ],
+  "robust_accs": [
+    0.0
+  ],
+  "clean_accs": [
+    0.0
+  ]
+}
