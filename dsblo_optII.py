@@ -97,7 +97,6 @@ class DSBLOOptII:
         ul_losses = []
         hypergrad_norms = []
         raw_grad_norms = []  # Track raw ||g_t|| in addition to ||m_t||
-        x_history = []
 
         # Initial: compute y*(x) using CVXPyLayer (noisy Q_lower inside solve_ll)
         yhat = self.solve_ll(x)
@@ -179,7 +178,6 @@ class DSBLOOptII:
                 ul_losses.append(self.problem.upper_objective(x, y_star).item())
             hypergrad_norms.append(torch.norm(g).item())
             raw_grad_norms.append(torch.norm(g).item())
-            x_history.append(x.clone().detach())
 
             # adaptive eta cap if not improving
             if adapt_eta:
@@ -208,7 +206,6 @@ class DSBLOOptII:
             'ul_losses': ul_losses,
             'hypergrad_norms': hypergrad_norms,
             'raw_grad_norms': raw_grad_norms,  # Include raw gradient norms
-            'x_history': x_history,
             'iterations': T,
             'converged': torch.norm(m).item() < 1e-3,
         }

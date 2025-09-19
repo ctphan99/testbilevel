@@ -248,7 +248,6 @@ def run_exact_sbatch_vs_dsblo():
             'iterations': args.T,
             'ul_losses': ul_losses,
             'hypergrad_norms': hypergrad_norms,
-            'x_history': x_hist,
         }
 
     # Run SSIGD (always included unless only-ssigd is specified)
@@ -282,7 +281,6 @@ def run_exact_sbatch_vs_dsblo():
             'iterations': args.T,
             'ul_losses': ul_losses_ssigd,
             'hypergrad_norms': hypergrad_norms_ssigd,
-            'x_history': [x_ssigd] * args.T  # SSIGD only returns final x, so replicate for history
         }
         print()
         print("SSIGD Results:")
@@ -295,57 +293,15 @@ def run_exact_sbatch_vs_dsblo():
     # Create comparison plot
     print("Creating comparison plot...")
     
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-    # Optionally recompute UL with a single fixed CRN noise for both methods
+    # Get UL losses for plotting
     ul_f2csa = f2csa_results['ul_losses'] if f2csa_results is not None else None
     ul_dsblo = dsblo_results['ul_losses'] if dsblo_results is not None else None
-    if args.use_crn_ul:
-        crn_up, _ = problem._sample_instance_noise()
-        # recompute along x histories with fixed noise
-        if f2csa_results is not None:
-            ul_f2csa_crn = []
-            for x_t in f2csa_results['x_history']:
-                y_star_t, _, _ = problem.solve_lower_level(x_t)
-                ul_f2csa_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
-            ul_f2csa = ul_f2csa_crn
-        if dsblo_results is not None:
-            ul_dsblo_crn = []
-            for x_t in dsblo_results['x_history']:
-                y_star_t, _, _ = problem.solve_lower_level(x_t)
-                ul_dsblo_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
-            ul_dsblo = ul_dsblo_crn
 
-    # Optional noisy overlay: Monte Carlo mean±std with fresh noise per point
-    if args.ul_overlay_noisy:
-        def mc_ul(x_hist, M=10):
-            means, stds = [], []
-            for x_t in x_hist:
-                vals = []
-                for _ in range(M):
-                    n_up, _ = problem._sample_instance_noise()
-                    y_star_t, _, _ = problem.solve_lower_level(x_t)
-                    vals.append(problem.upper_objective(x_t, y_star_t, n_up).item())
-                means.append(np.mean(vals))
-                stds.append(np.std(vals))
-            return np.array(means), np.array(stds)
-        m_f2, s_f2 = (None, None)
-        if f2csa_results is not None:
-            m_f2, s_f2 = mc_ul(f2csa_results['x_history'])
-        if dsblo_results is not None:
-            m_ds, s_ds = mc_ul(dsblo_results['x_history'])
-
-    # Optional raw noisy overlay: single fresh noise sample per iter (trajectory-like)
-    if args.ul_overlay_noisy_raw:
-        def raw_ul(x_hist):
-            raw_vals = []
-            for x_t in x_hist:
-                n_up, _ = problem._sample_instance_noise()
-                y_star_t, _, _ = problem.solve_lower_level(x_t)
-                raw_vals.append(problem.upper_objective(x_t, y_star_t, n_up).item())
-            return np.array(raw_vals)
-        raw_f2 = raw_ul(f2csa_results['x_history']) if f2csa_results is not None else None
-        raw_ds = raw_ul(dsblo_results['x_history']) if dsblo_results is not None else None
+    # Noisy overlay features disabled (no x_history tracking)
+    m_f2, s_f2, m_ds, s_ds = None, None, None, None
+    raw_f2, raw_ds = None, None
     
     # Plot 1: Upper-level loss comparison
     if ul_f2csa is not None:
@@ -396,37 +352,6 @@ def run_exact_sbatch_vs_dsblo():
     ax2.grid(True, alpha=0.3)
     ax2.set_yscale('log')
     
-    # Plot 3: F2CSA trajectory
-    if f2csa_results is not None:
-        x_history = torch.stack(f2csa_results['x_history'])
-        ax3.plot(x_history[:, 0], x_history[:, 1], 'b-', alpha=0.7, linewidth=1)
-        ax3.scatter(x_history[0, 0], x_history[0, 1], color='green', s=100, label='Start', zorder=5)
-        ax3.scatter(x_history[-1, 0], x_history[-1, 1], color='red', s=100, label='End', zorder=5)
-        ax3.set_xlabel('x[0]')
-        ax3.set_ylabel('x[1]')
-        ax3.set_title('F2CSA Trajectory (First 2 Dimensions)')
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-    else:
-        ax3.axis('off')
-    
-    # Plot 4: DS-BLO trajectory
-    if dsblo_results is not None:
-        x_history_dsblo = torch.stack(dsblo_results['x_history'])
-        ax4.plot(x_history_dsblo[:, 0], x_history_dsblo[:, 1], 'r-', alpha=0.7, linewidth=1, label='DS-BLO')
-        ax4.scatter(x_history_dsblo[0, 0], x_history_dsblo[0, 1], color='green', s=100, label='Start', zorder=5)
-        ax4.scatter(x_history_dsblo[-1, 0], x_history_dsblo[-1, 1], color='red', s=100, label='End', zorder=5)
-    if ssigd_results is not None:
-        x_history_ssigd = torch.stack(ssigd_results['x_history'])
-        ax4.plot(x_history_ssigd[:, 0], x_history_ssigd[:, 1], 'g-', alpha=0.7, linewidth=1, label='SSIGD')
-    if dsblo_legacy_results is not None:
-        x_hist_legacy = torch.stack(dsblo_legacy_results['x_history'])
-        ax4.plot(x_hist_legacy[:, 0], x_hist_legacy[:, 1], 'm--', alpha=0.7, linewidth=1, label='DS-BLO (Legacy)')
-    ax4.set_xlabel('x[0]')
-    ax4.set_ylabel('x[1]')
-    ax4.set_title('DS-BLO Trajectory (First 2 Dimensions)')
-    ax4.legend()
-    ax4.grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.savefig(args.plot_name, dpi=300, bbox_inches='tight')
