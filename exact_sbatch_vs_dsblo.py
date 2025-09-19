@@ -116,11 +116,13 @@ def run_exact_sbatch_vs_dsblo():
     # removed external perturbation; rely on per-sample instance noise from problem
     parser.add_argument('--dsblo-opt', type=str, choices=['I', 'II'], default='II', help='DS-BLO option (I deterministic, II stochastic)')
     parser.add_argument('--dsblo-sigma', type=float, default=0.0, help='Extra stochastic noise std for DS-BLO (set 0 to rely on instance noise only)')
-    parser.add_argument('--dsblo-gamma1', type=float, default=5.0, help='DS-BLO gamma1 for step size')
-    parser.add_argument('--dsblo-gamma2', type=float, default=1.0, help='DS-BLO gamma2 for step size')
+    parser.add_argument('--dsblo-gamma1', type=float, default=0.1, help='DS-BLO gamma1 for step size')
+    parser.add_argument('--dsblo-gamma2', type=float, default=0.1, help='DS-BLO gamma2 for step size')
     parser.add_argument('--dsblo-beta', type=float, default=0.6, help='DS-BLO momentum beta')
-    parser.add_argument('--dsblo-k', type=int, default=16, help='DS-BLO gradient averaging samples')
-    parser.add_argument('--dsblo-eta-cap', type=float, default=1e-3, help='DS-BLO eta cap baseline')
+    parser.add_argument('--dsblo-k', type=int, default=0, help='DS-BLO gradient averaging samples')
+    parser.add_argument('--dsblo-eta-cap', type=float, default=1e-2, help='DS-BLO eta cap baseline')
+    parser.add_argument('--ssigd-beta', type=float, default=0.01, help='SSIGD initial step size (defaults to 0.01)')
+    parser.add_argument('--ssigd-mu-f', type=float, default=0.1, help='SSIGD strong convexity constant (defaults to 0.1)')
     parser.add_argument('--use-crn-ul', action='store_true', help='Plot UL with a single fixed CRN noise for both methods')
     parser.add_argument('--ul-scale', type=str, choices=['linear','symlog'], default='linear', help='Y-scale for UL plots')
     parser.add_argument('--ul-overlay-noisy', action='store_true', help='Overlay MC mean±std with fresh noise per iter')
@@ -130,7 +132,6 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--legacy-dsblo', action='store_true', help='Run DsBlo (algorithms.py) on a fixed noisy instance')
     parser.add_argument('--only-dsblo', action='store_true', help='Run only DS-BLO and plot its results')
     parser.add_argument('--only-ssigd', action='store_true', help='Run only SSIGD and plot its results')
-    parser.add_argument('--with-ssigd', action='store_true', help='Include SSIGD in comparison')
     parser.add_argument('--ul-track-noisy-ll', action='store_true', help='Track UL using LL solved with noisy Q_lower each iter (DS-BLO)')
     
     args = parser.parse_args()
@@ -165,7 +166,7 @@ def run_exact_sbatch_vs_dsblo():
     print()
     
     # Compute initial upper-level loss
-    y0_star, _ = problem.solve_lower_level(x0)
+    y0_star, _, _ = problem.solve_lower_level(x0)
     initial_ul_loss = problem.upper_objective(x0, y0_star).item()
     print(f"Initial UL loss: {initial_ul_loss:.6f}")
     print()
@@ -183,7 +184,7 @@ def run_exact_sbatch_vs_dsblo():
         
         f2csa_results = algorithm2.optimize(
             x0, args.T, args.D, args.eta, delta, args.alpha, args.Ng,
-            warm_ll=args.warm_ll, keep_adam_state=args.keep_adam_state,
+            warm_ll=args.warm_ll,
             plot_name=None, save_warm_name=None
         )
         
@@ -250,15 +251,30 @@ def run_exact_sbatch_vs_dsblo():
             'x_history': x_hist,
         }
 
-    # Run SSIGD if requested
+    # Run SSIGD (always included unless only-ssigd is specified)
     ssigd_results = None
-    if args.with_ssigd:
+    if not args.only_dsblo:
         print("=" * 50)
         print("RUNNING SSIGD")
         print("=" * 50)
         ssigd_algo = CorrectSSIGD(problem)
         ssigd_algo.crn_upper = crn_upper  # Set fixed CRN for UL loss evaluation
-        x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd = ssigd_algo.solve(T=args.T, beta=args.eta, x0=x0)
+        
+        # Compute μ_F for SSIGD diminishing step sizes
+        if args.ssigd_mu_f is not None:
+            mu_F = args.ssigd_mu_f
+        else:
+            mu_F = torch.linalg.eigvals(problem.Q_upper).real.min().item()
+            mu_F = max(mu_F, 0.1)  # Ensure μ_F >= 0.1 for stability
+        
+        # Use SSIGD-specific beta or fall back to default
+        ssigd_beta = args.ssigd_beta
+        
+        print(f"SSIGD Parameters: T={args.T}, beta={ssigd_beta:.4f}, μ_F={mu_F:.6f}")
+        
+        x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd = ssigd_algo.solve(
+            T=args.T, beta=ssigd_beta, x0=x0, diminishing=True, mu_F=mu_F
+        )
         ssigd_results = {
             'final_ul_loss': ul_losses_ssigd[-1],
             'final_gradient_norm': hypergrad_norms_ssigd[-1],
@@ -290,13 +306,13 @@ def run_exact_sbatch_vs_dsblo():
         if f2csa_results is not None:
             ul_f2csa_crn = []
             for x_t in f2csa_results['x_history']:
-                y_star_t, _ = problem.solve_lower_level(x_t)
+                y_star_t, _, _ = problem.solve_lower_level(x_t)
                 ul_f2csa_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
             ul_f2csa = ul_f2csa_crn
         if dsblo_results is not None:
             ul_dsblo_crn = []
             for x_t in dsblo_results['x_history']:
-                y_star_t, _ = problem.solve_lower_level(x_t)
+                y_star_t, _, _ = problem.solve_lower_level(x_t)
                 ul_dsblo_crn.append(problem.upper_objective(x_t, y_star_t, crn_up).item())
             ul_dsblo = ul_dsblo_crn
 
@@ -308,7 +324,7 @@ def run_exact_sbatch_vs_dsblo():
                 vals = []
                 for _ in range(M):
                     n_up, _ = problem._sample_instance_noise()
-                    y_star_t, _ = problem.solve_lower_level(x_t)
+                    y_star_t, _, _ = problem.solve_lower_level(x_t)
                     vals.append(problem.upper_objective(x_t, y_star_t, n_up).item())
                 means.append(np.mean(vals))
                 stds.append(np.std(vals))
@@ -325,7 +341,7 @@ def run_exact_sbatch_vs_dsblo():
             raw_vals = []
             for x_t in x_hist:
                 n_up, _ = problem._sample_instance_noise()
-                y_star_t, _ = problem.solve_lower_level(x_t)
+                y_star_t, _, _ = problem.solve_lower_level(x_t)
                 raw_vals.append(problem.upper_objective(x_t, y_star_t, n_up).item())
             return np.array(raw_vals)
         raw_f2 = raw_ul(f2csa_results['x_history']) if f2csa_results is not None else None
@@ -421,30 +437,50 @@ def run_exact_sbatch_vs_dsblo():
     print("=" * 80)
     print("FINAL COMPARISON SUMMARY")
     print("=" * 80)
-    print(f"{'Metric':<25} {'F2CSA (SBATCH)':<20} {'DS-BLO':<20} {'Winner':<15}")
-    print("-" * 80)
-    print(f"{'Initial UL Loss':<25} {initial_ul_loss:<20.6f} {initial_ul_loss:<20.6f} {'Same':<15}")
-    if f2csa_results is not None and dsblo_results is not None:
-        print(f"{'Final UL Loss':<25} {f2csa_results['final_ul_loss']:<20.6f} {dsblo_results['final_ul_loss']:<20.6f} {'F2CSA' if f2csa_results['final_ul_loss'] < dsblo_results['final_ul_loss'] else 'DS-BLO':<15}")
-        print(f"{'Final Grad Norm':<25} {f2csa_results['final_gradient_norm']:<20.6f} {dsblo_results['final_gradient_norm']:<20.6f} {'F2CSA' if f2csa_results['final_gradient_norm'] < dsblo_results['final_gradient_norm'] else 'DS-BLO':<15}")
-        print(f"{'Converged':<25} {f2csa_results['converged']:<20} {dsblo_results['converged']:<20} {'F2CSA' if f2csa_results['converged'] and not dsblo_results['converged'] else 'DS-BLO' if dsblo_results['converged'] and not f2csa_results['converged'] else 'Both' if f2csa_results['converged'] and dsblo_results['converged'] else 'Neither':<15}")
-        print(f"{'Iterations':<25} {f2csa_results['iterations']:<20} {dsblo_results['iterations']:<20} {'Same':<15}")
-    elif dsblo_results is not None:
-        print(f"{'Final UL Loss':<25} {'-':<20} {dsblo_results['final_ul_loss']:<20.6f} {'DS-BLO':<15}")
-        print(f"{'Final Grad Norm':<25} {'-':<20} {dsblo_results['final_gradient_norm']:<20.6f} {'DS-BLO':<15}")
-        print(f"{'Converged':<25} {'-':<20} {dsblo_results['converged']:<20} {'DS-BLO':<15}")
-        print(f"{'Iterations':<25} {'-':<20} {dsblo_results['iterations']:<20} {'DS-BLO':<15}")
-    elif ssigd_results is not None:
-        print(f"{'Final UL Loss':<25} {'-':<20} {'-':<20} {'SSIGD only':<15}")
-        print(f"{'Final Grad Norm':<25} {'-':<20} {'-':<20} {'SSIGD only':<15}")
-        print(f"{'Converged':<25} {'-':<20} {'-':<20} {'SSIGD only':<15}")
-        print(f"{'Iterations':<25} {'-':<20} {'-':<20} {'SSIGD only':<15}")
-    if dsblo_legacy_results is not None:
-        print(f"{'(Legacy) Final UL Loss':<25} {'-':<20} {dsblo_legacy_results['final_ul_loss']:<20.6f} {'DS-BLO (Legacy)':<15}")
-        print(f"{'(Legacy) Final Grad Norm':<25} {'-':<20} {dsblo_legacy_results['final_gradient_norm']:<20.6f} {'DS-BLO (Legacy)':<15}")
+    print(f"{'Metric':<25} {'F2CSA (SBATCH)':<20} {'DS-BLO':<20} {'SSIGD':<20} {'Winner':<15}")
+    print("-" * 100)
+    
+    # Determine winners
+    final_ul_losses = []
+    final_grad_norms = []
+    if f2csa_results is not None:
+        final_ul_losses.append(('F2CSA', f2csa_results['final_ul_loss']))
+        final_grad_norms.append(('F2CSA', f2csa_results['final_gradient_norm']))
+    if dsblo_results is not None:
+        final_ul_losses.append(('DS-BLO', dsblo_results['final_ul_loss']))
+        final_grad_norms.append(('DS-BLO', dsblo_results['final_gradient_norm']))
     if ssigd_results is not None:
-        print(f"{'SSIGD Final UL Loss':<25} {'-':<20} {'-':<20} {ssigd_results['final_ul_loss']:<20.6f} {'SSIGD':<15}")
-        print(f"{'SSIGD Final Grad Norm':<25} {'-':<20} {'-':<20} {ssigd_results['final_gradient_norm']:<20.6f} {'SSIGD':<15}")
+        final_ul_losses.append(('SSIGD', ssigd_results['final_ul_loss']))
+        final_grad_norms.append(('SSIGD', ssigd_results['final_gradient_norm']))
+    
+    ul_winner = min(final_ul_losses, key=lambda x: x[1])[0] if final_ul_losses else 'N/A'
+    grad_winner = min(final_grad_norms, key=lambda x: x[1])[0] if final_grad_norms else 'N/A'
+    
+    print(f"{'Initial UL Loss':<25} {initial_ul_loss:<20.6f} {initial_ul_loss:<20.6f} {initial_ul_loss:<20.6f} {'Same':<15}")
+    
+    f2csa_ul = f2csa_results['final_ul_loss'] if f2csa_results is not None else '-'
+    dsblo_ul = dsblo_results['final_ul_loss'] if dsblo_results is not None else '-'
+    ssigd_ul = ssigd_results['final_ul_loss'] if ssigd_results is not None else '-'
+    print(f"{'Final UL Loss':<25} {f2csa_ul:<20} {dsblo_ul:<20} {ssigd_ul:<20} {ul_winner:<15}")
+    
+    f2csa_grad = f2csa_results['final_gradient_norm'] if f2csa_results is not None else '-'
+    dsblo_grad = dsblo_results['final_gradient_norm'] if dsblo_results is not None else '-'
+    ssigd_grad = ssigd_results['final_gradient_norm'] if ssigd_results is not None else '-'
+    print(f"{'Final Grad Norm':<25} {f2csa_grad:<20} {dsblo_grad:<20} {ssigd_grad:<20} {grad_winner:<15}")
+    
+    f2csa_conv = f2csa_results['converged'] if f2csa_results is not None else '-'
+    dsblo_conv = dsblo_results['converged'] if dsblo_results is not None else '-'
+    ssigd_conv = ssigd_results['converged'] if ssigd_results is not None else '-'
+    print(f"{'Converged':<25} {f2csa_conv:<20} {dsblo_conv:<20} {ssigd_conv:<20} {'-':<15}")
+    
+    f2csa_iter = f2csa_results['iterations'] if f2csa_results is not None else '-'
+    dsblo_iter = dsblo_results['iterations'] if dsblo_results is not None else '-'
+    ssigd_iter = ssigd_results['iterations'] if ssigd_results is not None else '-'
+    print(f"{'Iterations':<25} {f2csa_iter:<20} {dsblo_iter:<20} {ssigd_iter:<20} {'Same':<15}")
+    
+    if dsblo_legacy_results is not None:
+        print(f"{'(Legacy) Final UL Loss':<25} {'-':<20} {dsblo_legacy_results['final_ul_loss']:<20.6f} {'-':<20} {'DS-BLO (Legacy)':<15}")
+        print(f"{'(Legacy) Final Grad Norm':<25} {'-':<20} {dsblo_legacy_results['final_gradient_norm']:<20.6f} {'-':<20} {'DS-BLO (Legacy)':<15}")
     print("=" * 80)
     
     return {

@@ -1,0 +1,211 @@
+\section{Lower level problem with linear equality constraint}\label{sec:equality-bilevel}
+We consider bilevel programming with a linear equality constraint in the lower-level problem: 
+\begin{align*}\numberthis\label[prob]{prob:lin-eq}
+     & \mbox{minimize}_{x\in \mathcal{X}} ~ F(x) \coloneqq f(x, \ystar(x)) \text{ subject to } ~\ystar(x)\in \arg\min\nolimits_{y: h(x, y) = 0} g(x, y), 
+\end{align*}
+% \[
+% \begin{array}{ll}
+%      \mbox{minimize}_{x\in \mathcal{X}} & F(x):= f(x, \ystar(x))  \\
+%      \mbox{subject to } & \ystar(x)\in \arg\min_{y: h(x, y) = 0} g(x, y), 
+% \end{array} \numberthis\label[prob]{prob:lin-eq}
+% \] 
+where $f$, $g$, and $h$ satisfy the 
+the regularity properties as described in  \cref{assumption:linEq_smoothness}. 
+
+% \begin{assumption}\label{assumption:linEq_smoothness} 
+% We study \cref{prob:lin-eq} under the following assumptions. 
+% \begin{assumpenum}
+% \compresslist{
+% \item\label[assum]{item:assumption_lineq_first} Upper-level: The objective $f$  is $C_f$-smooth in $x,y$ jointly, i.e., $\norm{\nabla f(x_1,y_1) - \nabla f(x_2,y_2)} \! \leq C_f \norm{(x_1,y_1) - (x_2, y_2)}$ and $L_f$-Lipschitz in $y$. The constraint $\mathcal{X}$ is a convex compact set. 
+%     \item Lower-level: The objective $g$ is second-order smooth with parameter $C_g$ and $\mu_g$-strongly convex in $y$. The constraint $h(x,y)=Ax-By-b$ has  $B$ being full row rank. \jz{Maybe we could justify the full rankness by complete recourse. That is, for any given $x$, there exists some $y$ to make the LL program feasible. I am wondering if we need that assumption for the inequality case? }
+% }
+% \end{assumpenum}
+% \end{assumption}
+
+Our main insight is that the hyper-gradient  $\grad_{x}F(x):=\grad_{x}f(x,y^{*}(x))+\frac{d y^*(x)}{dx}\grad_{y}f(x,y^{*}(x))$ is Lipschitz-continuous and  admits an easily computable --- yet highly accurate --- finite-difference approximation. Running gradient descent  for smooth non-convex optimization with this finite difference gradient proxy would then lead us to an approximate-stationary point. 
+
+\iffalse
+Specifically, fixing an $x\in \mathcal{X}$, our proposed finite-difference gradient proxy is motivated by the chain rule from calculus
+$$\lim_{\delta\rightarrow0} \frac{y^*[x+\delta \nabla_y f(x,y^*(x))]-y^*(x)}{\delta}=\frac{d y^*(x)}{dx}\nabla_{y}f(x,y^{*}(x)).$$
+
+Our proposed finite-difference proxy to it is given by 
+ \[\mathcal{G}_{y^*}(x;\delta):={\frac{y^*[x+\delta \nabla_y f(x,y^*(x))]-y^*(x)}{\delta} \numberthis\label{eq:part-hypergrad-approx-lin-eq}.}\]
+We will show that $\mathcal{G}_{y^*}(x;\delta)$ approximates $\frac{d y^*(x)}{dx}\nabla_{y}f(x,y^{*}(x))$ up to an error of $O(\delta)$. Notice  \cref{{eq:part-hypergrad-approx-lin-eq}} avoids differentiating through the implicit function $y^*(x)$. Instead, all we need to evaluate it are the values of $(y^*(x),y^*(x+\delta \nabla_y f(x,y^*(x))))$. Since these are  solutions to a smooth strongly convex linearly constrained  problem, accurate approximates to them could be readily obtained. 
+ % for a given $x$
+
+
+\begin{algorithm}[h]
+\begin{algorithmic}[1]\caption{Inexact Gradient Oracle for Linear Equality Constraint}\label{alg:LE-inexact-gradient-oracle}
+\State \textbf{Input:} 
+Current $x$, accuracy $\epsilon$, perturbation $\delta = \epsilon^2$.
+\jz{maybe we should state the accuracy required for solving these subproblems. We can only get some $\hat{y}^*(x)$ to approximate $y^*(x)$, also $\nabla_y f(x,y^*(x))$  would be evaluated at such a  $\nabla_y f(x,\hat{y}^*(x))$}
+\State Compute $y^*$ (as in \cref{prob:lin-eq}) and $\lamstar$ (as in \cref{eqs:kkt-lin-eq}) 
+\State Compute $\ystardel$ (as in \cref{eq:lower_perturb}) and $\lamdeltar$ (as in \cref{eqs:lineq-kkt-perturbed}) 
+\State Compute $v$ as in \cref{eq:part-hypergrad-approx-lin-eq} \Comment{Approximates $\partial_{y}f(x,y^{*}(x))\frac{\partial y^{*}(x)}{\partial x}$}
+\State Compute $\hat{\mathcal{G}}_{y^*}(x;\delta):=\frac{\hat{y}^*[x+\delta \nabla_y f(x,\hat{y}^*(x))]-\hat{y}^*(x)}{\delta}$
+% \pswt{cref a standalone expression}
+\State \textbf{Output:} $\widetilde{\nabla} F = v + \partial_x f(x, y^*(x))$
+\end{algorithmic}
+\end{algorithm}
+
+
+\fi 
+
+Specifically, fixing an $x\in \mathcal{X}$, our proposed finite-difference gradient proxy is given by the left-hand side of the following equation, approximating the implicit gradient term up to a $O(\delta)$-additive error:
+ \[{\frac{\nabla_{x}[g(x,\ystardel)+\lamdeltar h(x,\ystar)]-\nabla_{x}[g(x,y^{*}(x))+\lamstar h(x,y^{*})]}{\delta}= \frac{d y^*(x)}{dx}\grad_{y}f(x,y^{*}(x)+O(\delta) \numberthis\label{eq:part-hypergrad-approx-lin-eq},}\]
+where, for a fixed $x$, $(\ydelstar,\lamdeltar)$ are the primal and dual solutions to the
+ perturbed lower level problem
+ % for a given $x$
+\begin{align}\label{eq:lower_perturb}
+    & \ydelstar \coloneqq \arg\min\nolimits_{y: h(x,y) = 0} ~g(x,y)+\delta f(x,y).
+\end{align}
+
+\begin{algorithm}[h]
+\begin{algorithmic}[1]\caption{Inexact Gradient Oracle for Linear Equality Constraint}\label{alg:LE-inexact-gradient-oracle}
+\State \textbf{Input:}
+Current $x$, accuracy $\epsilon$, perturbation $\delta = \epsilon^2$.
+\State Compute $y^*$ (as in \cref{prob:lin-eq}) and $\lamstar$ (as in \cref{eqs:kkt-lin-eq}) 
+\State Compute $\ystardel$ (as in \cref{eq:lower_perturb}) and $\lamdeltar$ (as in \cref{eqs:lineq-kkt-perturbed}) 
+\State Compute $v$ as in \cref{eq:part-hypergrad-approx-lin-eq} \Comment{Approximates $\partial_{y}f(x,y^{*}(x))\frac{\partial y^{*}(x)}{\partial x}$}
+% \pswt{cref a standalone expression}
+\State \textbf{Output:} $\widetilde{\nabla} F = v + \partial_x f(x, y^*(x))$
+\end{algorithmic}
+\end{algorithm}
+
+Notice that the finite-difference term in \cref{{eq:part-hypergrad-approx-lin-eq}} avoids differentiating through the implicit function $y^*(x)$. Instead, all we need to evaluate it are the values of $(y^*,\lambda^*,\ydelstar,\lamdeltar)$ (followed by gradient queries to $g$ and $h$). Since these are  solutions to a smooth strongly convex linearly constrained  problem, accurate approximates to $(y^*,\lambda^*)$ could be readily obtained. Similarly, since the approximation error in \cref{eq:part-hypergrad-approx-lin-eq}  is proportion to $\delta$, we can choose a  small $\delta$  such that the perturbed objective $ g+\delta f$ in \cref{eq:lower_perturb} is dominated by the strongly convex and smooth $g$, whereby accurate approximates to $(y_\delta^*,\lambda_\delta^*)$ could also be readily obtained. Putting it all together, the proposed finite-difference hyper-gradient proxy in \cref{eq:part-hypergrad-approx-lin-eq}  can be  efficiently computed.
+
+\begin{restatable}{theorem}{linEqFullCost}\label{thm:lineq-cost}
+    Consider  \cref{prob:lin-eq} under \cref{assumption:linEq_smoothness}, and define $\kappa=C_g/\mu_g$ to be the condition number of $g$. Then there exists an algorithm so that after $T=O(\sqrt{\kappa}\epsilon^{-2})$ gradient oracle calls to $f$, $g$, and $h$, we have $\min_{i\in [T]} \|\nabla F(x_i)\|\leq \epsilon$. 
+\end{restatable}
+
+
+By an application of the implicit function theorem to the KKT system of \cref{eq:lower_perturb}, we show in \cref{{lem:lineq-finitediff-equals-gradf}} that the variable $\ystardel$  and its corresponding optimal dual variable $\lamdeltar$ can be used to construct an approximation to  $\frac{d}{dx}y^{*}(x)\grad_{y}f(x,y^{*}(x))$, as displayed in \cref{alg:LE-inexact-gradient-oracle}. 
+% The required regularity properties of $\ystardel$ and $\lamdeltar$ for this gradient approximation to hold are essentially satisfied when $f$, $g$, and $h$ satisfy \cref{assumption:linEq_smoothness}.  
+The regularity properties of $f$, $g$, and $h$  from \cref{assumption:linEq_smoothness} also imply smoothness of $F$, as we formally show in \cref{{{thm:lineq-cost}}}; therefore, our inexact gradient oracle of $F$ (via \cref{alg:LE-inexact-gradient-oracle}) allows us to run  $O(\epsilon^{-2})$ iterations of projected gradient descent with an inexact gradient oracle to obtain an $\epsilon$-stationary point for \cref{prob:lin-eq}. Since each iteration of \cref{alg:LE-inexact-gradient-oracle} solves a strongly convex optimization problem over a linear subspace, it costs $O(\sqrt{\kappa})$~\cite{salim2022optimal}, where $\kappa$ is the condition number of $f$, thus giving us a total cost of $O(\sqrt{\kappa}\epsilon^{-2})$ in attaining $\epsilon$-stationarity of \cref{prob:lin-eq}, as formalized in \cref{thm:lineq-cost}.
+
+
+%%%%%%%%%%%%
+
+\subsection{Main idea}\label{sec:warmup-lin-eq}
+
+\jz{sketch Lemma 3.3 in a high level, why does these two quantities match in the limit? also explain the smoothness}
+The core technical difficulty encountered in the construction of the hypergradient  for \cref{prob:lin-eq} is due to the term in \cref{eqn:second-order-method} involving $\frac{dy^*}{dx}$. 
+
+As discussed in \cref{sec:differentiable-optimization}, we can differentiate through the KKT conditions and apply implicit function theorem to derive the following linear equation to solve $\frac{dy^*}{dx}$.
+Specifically, fix a point $x$. Given $y^*= \arg\min_{y: h(x,y)=0} g(x,y)$, and $\lamstar$ is the dual optimal variable, define $\Leqc(x,y,\lam)=g(x,y)+\lam^\top h(x,y)$. Then, we have 
+\[
+\underbrace{\begin{bmatrix}\grad^2_{yy}\Leqc(x,\ystar,\lamstar) & \nabla_y h(x,y^{*})^{\top}\\
+\nabla_y h(x,y^{*}) & 0
+\end{bmatrix}}_{H ~\text{for linear equality constraints}}\begin{bmatrix}\frac{d\ystar}{dx}\\
+\frac{d\lamstar}{dx}
+\end{bmatrix}=\begin{bmatrix}-\nabla^2_{yx}g(x,y^{*})-\langle\lamstar, \nabla^2_{yx}h(x,y^{*})\rangle\\
+-\nabla_x h(x,\ystar)\end{bmatrix}.\numberthis\label{eq:def_matrix_H}\]
+
+% Hence, we first make the following technical observation. 
+% \jz{put one of the matrix inequality here to show how finite difference match the desired thing.}
+% \begin{restatable}{lemma}{lemDystarDxLineq}\label{lem:dystarDxLinEq}
+%     Fix a point $x$. Given $y^*= \arg\min_{y: h(x,y)=0} g(x,y)$ where $g$ is strongly convex in $y$ and $\lamstar$ is the dual optimal variable, define $\Leqc(x,y,\lam)=g(x,y)+\lam^\top h(x,y)$. Then, we have 
+% \[\underbrace{\begin{bmatrix}\grad^2_{yy}\Leqc(x,\ystar,\lamstar) & \nabla_y h(x,y^{*})^{\top}\\
+% \nabla_y h(x,y^{*}) & 0
+% \end{bmatrix}}_{H ~\text{for linear equality constraints}}\begin{bmatrix}\frac{d\ystar}{dx}\\
+% \frac{d\lamstar}{dx}
+% \end{bmatrix}=\begin{bmatrix}-\nabla^2_{yx}g(x,y^{*})-\langle\lamstar, \nabla^2_{yx}h(x,y^{*})\rangle\\
+% -\nabla_x h(x,\ystar)\end{bmatrix}.\numberthis\label{eq:def_matrix_H}\]
+% \end{restatable}
+
+
+% before showing how to approximate the hypergradient, we first analyze $\frac{dy^*}{dx}$ in the simpler setting of $y^*$ being the solution of an equality
+% constrained problem (i.e., focusing on only the lower level of \cref{prob:lin-eq}). Specifically, consider the following nonlinear
+% optimization problem given by 
+% \[
+% y^{*} := \begin{array}{ll}
+% \arg\min_{y} & g(x,y)\\
+% \mbox{subject to} & h(x,y)=0,
+% \end{array}\numberthis\label{eq:ystar_def_leqc}
+% \] where $g$ is assumed strongly convex. 
+% Define $\Leqc(x,y,\lam):=g(x,y)+\lam h(x,y).$ \pswt{dimensions of $\lam$ and $h$}  
+
+% \begin{equation}
+% \underbrace{\begin{bmatrix}\grad^2_{yy}\Leqc(x,\ystar,\lamstar) & h_{y}(x,y^{*})^{\top}\\
+% h_{y}(x,y^{*}) & 0
+% \end{bmatrix}}_{H}\begin{bmatrix}\frac{d\ystar}{dx}\\
+% \frac{d\lamstar}{dx}
+% \end{bmatrix}=\begin{bmatrix}-g_{yx}(x,y^{*})-\lamstar h_{yx}(x,y^{*})\\
+% -h_{x}(x,\ystar)
+% \end{bmatrix}.\label{eq:def_matrix_H}
+% \end{equation}
+% If the matrix $H$ as in \cref{eq:def_matrix_H} is invertible, we may express the above equation as \[
+% \begin{bmatrix}\frac{d\ystar}{dx}\\
+% \frac{d\lamstar}{dx}
+% \end{bmatrix}=H^{-1}\begin{bmatrix}-g_{yx}(x,y^{*})-\lamstar h_{yx}(x,y^{*})\\
+% -h_{x}(x,\ystar)
+% \end{bmatrix}.
+% \]
+% When $H$ is invertible, it affords us a formulation of $\frac{dy^*}{dx}$ as th
+In \cref{lem:non-singular-req}, we provide a condition
+for when the matrix $H$ from  \cref{eq:def_matrix_H} is invertible; essentially, it says that
+$H$ is invertible as long as $g$ is strongly convex. 
+\begin{restatable}{lemma}{lemLineqHinvertibility}\label{lem:non-singular-req} 
+Consider the setup in \cref{{lem:dystarDxLinEq}}. The matrix $H$ defined in \cref{eq:def_matrix_H}  is invertible if
+the Hessian $\grad_{yy}^{2}\Leqc(x,\ystar,\lamstar):=\nabla^2_{yy} g(x, y^*) +\lamstar \nabla^2_{yy} h(x, y^*)$
+satisfies $\nabla_{yy}^{2}\Leqc(x,\ystar,\lamstar)\succ0$ over
+the tangent plane $T:=\{y:\nabla_y h(x,y^{*})y=0\}$ and $\nabla_y h$ has full
+rank.
+% , i.e., $\ystar$ is a non-degenerate local optimal solution. 
+% As such, \pswt{move this}
+% \label{lem:non-singular-req}
+\end{restatable}
+
+%
+\begin{restatable}{corollary}{corNonSingularH}\label{cor:nonsingularH}
+For \cref{prob:lin-eq} under \cref{assumption:linEq_smoothness}, 
+ the matrix $H$  (as defined in \cref{eq:def_matrix_H}) is non-singular. Further, there exists a finite $C_H$ such that $\|H^{-1}\|\leq C_H$. 
+% and $\|\frac{d\ystar}{dx}\|\leq C_H C_g$. 
+\end{restatable}
+
+%%%%%%%%%%%%
+% \subsection{Inexact gradient oracle}
+% We approximate the component $\partial_{y}f(x,y^{*}(x))\frac{\partial y^{*}(x)}{\partial x}$ of the hypergradient by \[\frac{\partial_{x}[g(x,\ystardel(x))+\lamdeltar h(x,\ystar)]-\partial_{x}[g(x,y^{*}(x))+\lamstar h(x,y^{*})]}{\delta}, \numberthis\label{eq:part-hypergrad-approx-lin-eq}\] where $\ydelstar$ and $\lamdeltar$ are, respectively, the primal and dual optimal values of the perturbed lower-level problem described in \cref{eq:lower_perturb}. 
+% The strong convexity of $g$ and a sufficiently small $\delta$  ensure closeness of $\ydelstar$ to $y^*$ (as shown in \cref{lem:y-delstar-Lip}), which in turn helps obtain the desired approximation to the hypergradient (\cref{{lem:lineq-in-limit-finitediff-equals-gradf}} and \cref{lem:lineq-finitediff-equals-gradf}). 
+
+
+
+
+% \begin{lemma}
+% The matrix $H$ defined in \ref{eq:def_matrix_H} is invertible if
+% the Hessian $\grad_{yy}^{2}\L(x,\ystar,\lamstar):=g_{yy}+\lamstar h_{yy}$
+% satisfies $\nabla_{yy}^{2}\mathcal{L}(x,\ystar,\lamstar)\succ0$ over
+% the tangent plane $T:=\{y:h_{y}(x,y^{*})y=0\}$ and $h_{y}$has full
+% rank, i.e., $\ystar$ is a non-degenerate local optimal solution.
+% \label{lem:non-singular-req}
+% \end{lemma}
+
+% \begin{proof}
+% Let $u=[y,\lam].$ We show $Hu=0\Rightarrow u=0$. If $h_{y}(x,\ystar)y\neq0,$we
+% have $Hu\neq0$. Otherwise if $h_{y}(x,\ystar)y=0$and $y\neq0$,
+% the quadratic form reduces to 
+
+% \[
+% u^{\top}Hu=y^{\top}\grad_{yy}\L(x,\ystar,\lamstar)y>0.
+% \]
+% If $y=0$, $h_{y}$having full rank implies $\lam=0$.
+% \end{proof}
+
+
+% To turn \cref{{lem:lineq-in-limit-finitediff-equals-gradf}} into the desired gradient approximation result (\cref{lem:lineq-finitediff-equals-gradf}), we need \cref{lem:smoothness_of_ydelstar_lamdelstar} bounding smoothness of $\ydelstar$ and $\lamdeltar$. 
+
+We are now ready to show our main gradient approximation result for this section. 
+\begin{restatable}{lemma}{lemLineqFiniteDiffEqualsGradF}\label{lem:lineq-finitediff-equals-gradf} Consider  \cref{prob:lin-eq} under \cref{assumption:linEq_smoothness}. 
+% Assume $h(x,y):=Ay-Bx-b$ with $A$ having full rank. <-included in \cref{prob:lin-eq} maybe put $A$ being full rank in an assumption env for clarity?
+Then the
+following relation is valid.
+% \pswt{also requires third order smoothness of $g$}
+\[
+\left\|\frac{\nabla_{x}[g(x,\ystardel(x))+\lamdeltar h(x,\ystar)]-\nabla_{x}[g(x,y^{*}(x))+\lamstar h(x,y^{*})]}{\delta}-\nabla_{y}f(x,y^{*}(x))\frac{d y^{*}(x)}{d x}\right\|\leq O(\delta).
+\]
+\end{restatable}
+
+
+
+
+

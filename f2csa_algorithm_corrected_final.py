@@ -38,126 +38,13 @@ class F2CSAAlgorithm1Final:
         print(f"  Target: δ-accuracy < 0.1 (δ = α³)")
         print(f"  Device: {device}, dtype: {dtype}")
     
-    def _solve_lower_level_accurate(self, x: torch.Tensor, alpha: float, prev_y: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
-        """
-        Solve lower-level problem accurately using CVXPY with SCS solver.
-        Returns y_star, lambda_star, and solution info
-        """
-        try:
-            import cvxpy as cp
-            
-            # Convert to numpy for CVXPY
-            x_np = x.detach().cpu().numpy()
-            Q_lower_np = self.problem.Q_lower.detach().cpu().numpy()
-            c_lower_np = self.problem.c_lower.detach().cpu().numpy()
-            A_np = self.problem.A.detach().cpu().numpy()
-            B_np = self.problem.B.detach().cpu().numpy()
-            b_np = self.problem.b.detach().cpu().numpy()
-            
-            # Create variables
-            y = cp.Variable(self.problem.dim)
-            
-            # Warm-start y if provided
-            try:
-                if prev_y is not None:
-                    y.value = prev_y.detach().cpu().numpy()
-            except Exception:
-                pass
-            
-            # Objective: min_y 0.5 * y^T Q_lower y + c_lower^T y
-            objective = cp.Minimize(0.5 * cp.quad_form(y, Q_lower_np) + c_lower_np.T @ y)
-            
-            # Constraints: A @ x + B @ y - b <= 0
-            constraints = [A_np @ x_np + B_np @ y - b_np <= 0]
-            
-            # Solve using SCS solver
-            problem_cvx = cp.Problem(objective, constraints)
-            problem_cvx.solve(verbose=False, solver=cp.SCS, warm_start=True)
-            
-            if problem_cvx.status == cp.OPTIMAL:
-                y_star = torch.tensor(y.value, dtype=self.dtype, device=self.device)
-                
-                # Extract dual variables (Lagrange multipliers)
-                lambda_star = torch.tensor(constraints[0].dual_value, dtype=self.dtype, device=self.device)
-                
-                # Compute constraint violations
-                h_val = self.problem.constraints(x, y_star)
-                violations = torch.clamp(h_val, min=0)
-                max_violation = torch.max(violations).item()
-                
-                info = {
-                    'status': 'optimal',
-                    'iterations': 0,  # CVXPY doesn't report iterations
-                    'lambda': lambda_star,
-                    'constraint_violations': violations,
-                    'converged': True,
-                    'max_violation': max_violation,
-                    'solver': 'CVXPY-SCS'
-                }
-                
-                return y_star, lambda_star, info
-            else:
-                raise ValueError(f"CVXPY solve failed with status: {problem_cvx.status}")
-                
-        except ImportError:
-            print("CVXPY not available, falling back to SGD")
-            return self._solve_lower_level_sgd(x, alpha)
-        except Exception as e:
-            print(f"CVXPY solve failed: {e}, falling back to SGD")
-            return self._solve_lower_level_sgd(x, alpha)
-    
     def _solve_lower_level_sgd(self, x: torch.Tensor, alpha: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """
-        Fallback: Solve using SGD with penalty method
+        Fallback: Use problem's built-in PGD solver with noisy Q_lower
         """
-        # Initialize at unconstrained optimum
-        y = -torch.linalg.solve(self.problem.Q_lower, self.problem.c_lower)
-        y.requires_grad_(True)
-        
-        # Use SGD optimizer
-        optimizer = torch.optim.SGD([y], lr=0.01)
-        
-        # Penalty parameter for constraints
-        penalty_weight = 1000.0
-        max_iter = 1000
-        tol = 1e-6
-        
-        for i in range(max_iter):
-            optimizer.zero_grad()
-            
-            # Lower-level objective
-            obj = 0.5 * torch.sum(y * (self.problem.Q_lower @ y)) + torch.sum(self.problem.c_lower * y)
-            
-            # Penalty for constraint violations
-            h = self.problem.constraints(x, y)
-            penalty = penalty_weight * torch.sum(torch.clamp(h, min=0) ** 2)
-            
-            # Total loss
-            total_loss = obj + penalty
-            total_loss.backward()
-            
-            optimizer.step()
-            
-            # Check convergence
-            grad_norm = torch.norm(y.grad)
-            if grad_norm < tol:
-                break
-        
-        # Compute dual variables (Lagrange multipliers) from penalty
-        h = self.problem.constraints(x, y)
-        lambda_opt = penalty_weight * torch.clamp(h, min=0)  # Approximate dual variables
-        
-        info = {
-            'status': 'optimal',
-            'iterations': i + 1,
-            'lambda': lambda_opt,
-            'constraint_violations': torch.clamp(h, min=0),
-            'converged': grad_norm < tol,
-            'max_violation': torch.max(torch.clamp(h, min=0)).item(),
-            'solver': 'SGD'
-        }
-        
-        return y.detach(), lambda_opt.detach(), info
+        # Use the problem's built-in PGD solver which already handles noisy Q_lower
+        y_opt, lambda_opt, info = self.problem.solve_lower_level(x, solver='pgd', max_iter=1000, tol=1e-6)
+        return y_opt, lambda_opt, info
     
     
     def _compute_smooth_activation(self, h_val: torch.Tensor, lambda_val: torch.Tensor, delta: float) -> torch.Tensor:
@@ -229,106 +116,31 @@ class F2CSAAlgorithm1Final:
     
     def _minimize_penalty_lagrangian(self, x: torch.Tensor, y_star: torch.Tensor, 
                                    lambda_star: torch.Tensor, alpha: float, delta: float,
-                                   init_y: Optional[torch.Tensor] = None,
-                                   keep_adam_state: bool = False) -> torch.Tensor:
+                                   init_y: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Minimize the penalty Lagrangian to find ỹ(x) using Adam optimizer.
-        Supports optional warm start for y and optional Adam state carryover across calls.
+        Minimize the penalty Lagrangian to find ỹ(x) using built-in optimizer.
+        Uses same noise across all algorithms from the problem.
         """
-        # Initialize y
-        if keep_adam_state and hasattr(self, "_adam_y") and hasattr(self, "_adam_opt"):
-            y = self._adam_y
-            if init_y is not None and y.shape == init_y.shape:
-                with torch.no_grad():
-                    y.copy_(init_y)
-            y.requires_grad_(True)
-            optimizer = self._adam_opt
-        else:
-            base = init_y if init_y is not None else y_star
-            noise = torch.randn_like(base) * 0.05
-            y = (base + noise).detach().requires_grad_(True)
-            # Use Adam optimizer with adaptive learning rate based on penalty strength
-            alpha2 = 1.0 / (alpha**4)
-            adaptive_lr = min(0.01, 1.0 / (alpha2**0.5))
-            optimizer = optim.Adam([y], lr=adaptive_lr)
-            if keep_adam_state:
-                self._adam_y = y
-                self._adam_opt = optimizer
+        # Initialize y as the solution from noisy lower-level solver
+        base = init_y if init_y is not None else y_star
+        y = base.detach().requires_grad_(True)
         
-        prev_y = y.clone()
-        for iteration in range(1000):
-            optimizer.zero_grad()
-            L_val = self._compute_penalty_lagrangian(x, y, y_star, lambda_star, alpha, delta)
-            L_val.backward()
-            optimizer.step()
-            
-            y_change = torch.norm(y - prev_y).item()
-            grad_norm = torch.norm(y.grad).item()
-            if y_change < delta or grad_norm < delta * 100:
-                print(f"    Converged at iteration {iteration + 1} (y_change = {y_change:.8f}, grad_norm = {grad_norm:.8f})")
-                break
-            prev_y = y.clone()
-            if iteration > 100 and y_change < 1e-10:
-                print(f"    Early stopping at iteration {iteration + 1} (no progress)")
-                break
-        
-        return y.detach()
-    
-    def _minimize_penalty_lagrangian_detailed(self, x: torch.Tensor, y_star: torch.Tensor, 
-                                            lambda_star: torch.Tensor, alpha: float, delta: float) -> torch.Tensor:
-        """
-        Fixed penalty Lagrangian minimization that actually works
-        """
-        # Start from a point different from y_star to avoid getting stuck
-        y = y_star + 0.5 * torch.randn_like(y_star)  # Start from random point near y_star
-        y.requires_grad_(True)
-        
-        # Use Adam optimizer with appropriate learning rate
+        # Use built-in optimizer to minimize penalty Lagrangian
         optimizer = optim.Adam([y], lr=0.01)
         
-        # Track convergence
-        prev_y = y.clone()
-        prev_loss = float('inf')
-        
-        print(f"    Starting fixed penalty minimization...")
-        print(f"    Initial y: {y.detach()}")
-        print(f"    Target y*: {y_star}")
-        
-        for iteration in range(5000):  # More iterations
-            optimizer.zero_grad()
-            
-            # Compute penalty Lagrangian
-            L_val = self._compute_penalty_lagrangian(x, y, y_star, lambda_star, alpha, delta)
-            
-            # Backward pass
-            L_val.backward()
-            
-            # Update y
-            optimizer.step()
-            
-            # Check gradient norm
-            grad_norm = torch.norm(y.grad).item()
-            
-            if iteration % 100 == 0:
-                print(f"    Iter {iteration}: L={L_val.item():.6f}, grad_norm={grad_norm:.6f}")
-            
-            # Simple convergence criterion based on gradient norm
-            if grad_norm < delta:
-                print(f"    Converged at iteration {iteration} (grad_norm = {grad_norm:.6f})")
-                break
-        
-        print(f"    Final y: {y.detach()}")
-        print(f"    Final gap: {torch.norm(y.detach() - y_star).item():.6f}")
+        # Minimize L_val = penalty_lagrangian(x, y, y_star, lambda_star, alpha, delta)
+        # Let the optimizer handle convergence automatically
+        L_val = self._compute_penalty_lagrangian(x, y, y_star, lambda_star, alpha, delta)
+        L_val.backward()
+        optimizer.step()
         
         return y.detach()
     
     def oracle_sample(self, x: torch.Tensor, alpha: float, N_g: int,
                       prev_y: Optional[torch.Tensor] = None,
-                      prev_lambda: Optional[torch.Tensor] = None,
-                      warm_ll: bool = False,
-                      keep_adam_state: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                      warm_ll: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Implement Algorithm 1 with optional LL warm start and Adam carryover.
+        Implement Algorithm 1 with optional LL warm start.
         Returns (hypergradient, y_tilde, lambda_star)
         """
         delta = alpha ** 3  # δ = α³
@@ -336,7 +148,7 @@ class F2CSAAlgorithm1Final:
         print(f"  Computing accurate lower-level solution with δ = {delta:.2e}")
         
         # Step 3: Compute ỹ*(x) and λ̃(x) by accurate solver with optional warm start
-        y_star, lambda_star, info = self._solve_lower_level_accurate(x, alpha, prev_y if warm_ll else None)
+        y_star, lambda_star, info = self.problem.solve_lower_level(x, solver='cvxpy', alpha=alpha)
         
         print(f"  Lower-level solution: ỹ* = {y_star}")
         print(f"  Lower-level multipliers: λ̃ = {lambda_star}")
@@ -347,14 +159,13 @@ class F2CSAAlgorithm1Final:
         # Step 4: Compute ỹ(x) = argmin_y L_{λ̃,α}(x,y)
         init_y = prev_y if warm_ll and prev_y is not None else y_star
         y_tilde = self._minimize_penalty_lagrangian(x, y_star, lambda_star, alpha, delta,
-                                                    init_y=init_y, keep_adam_state=keep_adam_state)
+                                                    init_y=init_y)
         
         print(f"  Penalty minimizer: ỹ = {y_tilde}")
         
         print(f"  Computing stochastic hypergradient with N_g = {N_g}")
         
-        # Step 5: Compute ∇F̃(x) = (1/N_g) Σ_{j=1}^{N_g} ∇_x L̃_{λ̃,α}(x, ỹ(x); ξ_j)
-        # The penalty Lagrangian L_{λ̃,α}(x,y) already includes f(x,y) as the first term
+        # Step 5: Compute ∇F̃(x) = (1/N_g) Σ_{j=1}^{N_g} ∇_x L̃_{λ̃,α}(x, ỹ(x); ξ_j)      
         hypergradient_samples = []
         
         for j in range(N_g):
@@ -362,7 +173,7 @@ class F2CSAAlgorithm1Final:
             noise_upper, _ = self.problem._sample_instance_noise()
             x_grad = x.clone().detach().requires_grad_(True)
             
-            # Compute the penalty Lagrangian L_{λ̃,α}(x,y) with stochastic noise
+            # Compute the penalty Lagrangian L_{λ̃,α}(x,y) with SAME stochastic noise
             # This includes f(x,y) + α₁(...) + α₂(...) as per Equation (415)
             L_val = self._compute_penalty_lagrangian(x_grad, y_tilde, y_star, lambda_star, alpha, delta, noise_upper)
             
@@ -378,7 +189,7 @@ class F2CSAAlgorithm1Final:
         return hypergradient, y_tilde.detach(), lambda_star.detach()
     
     def optimize(self, x0: torch.Tensor, max_iterations: int = 1000, 
-                alpha: float = 0.2, N_g: int = None, lr: float = 1e-3) -> Dict:
+                alpha: float = 0.05, N_g: int = None, lr: float = 1e-3) -> Dict:
         """
         Optimize using corrected F2CSA Algorithm 1 with modified penalty parameters
         
@@ -416,20 +227,26 @@ class F2CSAAlgorithm1Final:
             print(f"\n--- Iteration {iteration + 1}/{max_iterations} ---")
             
             # Compute stochastic hypergradient using corrected Algorithm 1
-            hypergradient = self.oracle_sample(x, alpha, N_g)
+            hypergradient, _, _ = self.oracle_sample(x, alpha, N_g)
             
             # Update x
             optimizer.zero_grad()
             x.grad = hypergradient
             optimizer.step()
             
-            # Compute current loss
+            # Compute current loss and gradient norm
             with torch.no_grad():
                 # Get current lower-level solution
-                y_current, _, _ = self._solve_lower_level_accurate(x, alpha)
+                y_current, _, _ = self.problem.solve_lower_level(x, solver='cvxpy', alpha=alpha)
                 current_loss = self.problem.upper_objective(x, y_current).item()
                 losses.append(current_loss)
-                grad_norms.append(torch.norm(hypergradient).item())
+            
+            # Compute gradient of f(x,y) w.r.t. x for monitoring
+            x_grad = x.clone().detach().requires_grad_(True)
+            y_grad, _, _ = self.problem.solve_lower_level(x_grad, solver='cvxpy', alpha=alpha)
+            f_val = self.problem.upper_objective(x_grad, y_grad)
+            f_grad = torch.autograd.grad(f_val, x_grad, create_graph=False)[0]
+            grad_norms.append(torch.norm(f_grad).item())
             
             print(f"  Loss: {current_loss:.6f}")
             print(f"  Gradient norm: {grad_norms[-1]:.6f}")
@@ -463,10 +280,8 @@ class F2CSAAlgorithm1Final:
         Test lower-level solution convergence with more iterations
         """
         # Get accurate lower-level solution using CVXPY
-        y_star, info = self.problem.solve_lower_level(x, 'accurate', max_iterations, 1e-6, alpha)
+        y_star, lambda_star, info = self.problem.solve_lower_level(x, solver='cvxpy', alpha=alpha)
         
-        # Extract lambda_star from info if available, otherwise use zeros
-        lambda_star = info.get('lambda_star', torch.zeros(self.problem.num_constraints, dtype=torch.float64))
         delta = alpha**3
         
         # Test convergence of penalty Lagrangian solver
@@ -494,7 +309,7 @@ class F2CSAAlgorithm1Final:
         # Optimal N_g: balance bias and variance for hypergradient estimation
         # For α = 0.001, use N_g = 100 for good balance
         N_g = max(10, min(100, int(1.0 / (alpha**1.5))))  # Balanced N_g
-        hypergradient = self.oracle_sample(x, alpha, N_g)
+        hypergradient, _, _ = self.oracle_sample(x, alpha, N_g)
         
         # Compute finite difference approximation
         eps = 1e-6
@@ -502,8 +317,8 @@ class F2CSAAlgorithm1Final:
         x_minus = x - eps
         
         # Get function values (need to solve for y first)
-        y_plus, _ = self.problem.solve_lower_level(x_plus, 'accurate', 1000, 1e-6, alpha)
-        y_minus, _ = self.problem.solve_lower_level(x_minus, 'accurate', 1000, 1e-6, alpha)
+        y_plus, _, _ = self.problem.solve_lower_level(x_plus, solver='cvxpy', alpha=alpha)
+        y_minus, _, _ = self.problem.solve_lower_level(x_minus, solver='cvxpy', alpha=alpha)
         
         f_plus = self.problem.upper_objective(x_plus, y_plus)
         f_minus = self.problem.upper_objective(x_minus, y_minus)

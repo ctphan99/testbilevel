@@ -1,0 +1,30 @@
+% In this paper, we consider constrained bilevel optimization problems, where the lower level constrains are characterized by a convex function of the lower and upper variables.
+
+% V1:
+% Solving bilevel optimization is known to be challenging and often requires computing expensive Hessian due to the bilevel structure.
+% Recently, a fully first-order gradient method was proposed to solve bilevel problems with stationarity guarantee, yet its result is limited to unconstrained bilevel problems only. % Background
+% In this paper, we consider constrained bilevel optimization and present Fully First-order Constrained Approximation methods (F\textsuperscript{2}CA) with hyperobjective stationarity guarantee. % contribution intro
+% For linear equality constraints, our algorithm can converge to an $\epsilon$-stationary solution within $O(1/\epsilon^2)$ gradient oracles, which matches to the best-known rate of the unconstrained case. % Equality summary
+% For general convex inequality constraints, our algorithm constructs an inexact gradient oracle, and uses it to reach
+% % an
+% $(\delta,\epsilon)$-Goldstein stationarity within $\tilde{O}(\frac{1}{\delta \epsilon^4})$ first-order oracles, or $\tilde{O}(\frac{d}{\delta \epsilon^3})$ zero-order estimates where $d$ is the dimensionality of variable $x$.  % First-order and zero-order constrained
+% Our experiment suggests that F\textsuperscript{2}CA demonstrates a significantly cheaper computation with a similar convergence performance compared to the Hessian-based method using differentiable optimization (\textit{cvxpylayer}).
+
+
+% Our result is the first fully first-order algorithm with hyperobjective stationarity guarantees for constrained bilevel optimization problems.  % Conclusion
+
+
+% Bilevel optimization is a popular yet difficult problem to solve due to the bilevel structure. Traditional methods use 
+
+% V2:
+% Solving bilevel optimization problems is known to be challenging, as most existing methods require Hessian computations which are prohibitive in modern large-scale applications.
+% Recently, a fully first-order method was proposed to solve bilevel problems with finite-time stationarity guarantees, yet this result is limited only to unconstrained bilevel problems. % Background
+% In this paper, we consider constrained bilevel optimization and present Fully First-order Constrained Approximation methods (F\textsuperscript{2}CA) with finite-time hyperobjective stationarity guarantees. % contribution intro
+% For linear equality constraints, our algorithm converges to an $\epsilon$-stationary point within $O(1/\epsilon^2)$ iterations, matching the best-known rate in the unconstrained case. % Equality summary
+% For general convex inequality constraints, our algorithm constructs an inexact hypergradient oracle, and uses it to reach
+% % % an
+% $(\delta,\epsilon)$-Goldstein stationarity within either $\tilde{O}(\frac{1}{\delta \epsilon^4})$ or $\tilde{O}(\frac{d}{\delta \epsilon^3})$ iterations, where $d$ is the upper-level dimension. Along the way we develop nonsmooth nonconvex optimization methods with inexact oracles, which may be of independent interest.
+% We support our theoretical findings with a numerical experiment, suggesting that F\textsuperscript{2}CA demonstrates 
+% similar convergence rate compared to Hessian-based methods using differentiable optimization (\textit{cvxpylayer}), while achieving significantly cheaper computation time.
+
+Algorithms for bilevel optimization often encounter Hessian computations, which are prohibitive in high dimensions. While recent works offer first-order methods for {unconstrained} bilevel problems, \textit{constrained} bilevel optimization remains relatively underexplored. We present {the first} fully first-order constrained optimization methods with finite-time hypergradient stationarity guarantees. For linear equality constraints, our algorithm converges to an $\epsilon$-stationary point in $\widetilde{O}(\epsilon^{-2})$ gradient oracle calls, which is nearly-optimal. For general convex inequality constraints, we attain $(\delta,\epsilon)$-Goldstein stationarity in either $\widetilde{O}({\delta^{-1} \epsilon^{-4}})$ or $\widetilde{O}(d{\delta^{-1} \epsilon^{-3}})$ gradient oracle calls, where $d$ is the upper-level dimension. Along the way, we develop novel nonsmooth nonconvex optimization methods with inexact oracles. Our preliminary numerical experiments verify these theoretical convergence guarantees.

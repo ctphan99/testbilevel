@@ -1,0 +1,135 @@
+\section{Nonsmooth nonconvex optimization with inexact  oracle}\label{sec:nonsmooth}
+We now shift gears from the case of linear \emph{equality} constraints to that of linear \emph{inequality} constraints. Specifically, defining $h(x,y)=Ax-By-b$,  the problem we now consider is 
+\begin{align}\label[prob]{prob:ineq}
+     \mathop{\text{minimize}}\nolimits_{x} ~ F(x) \coloneqq f(x, \ystar(x)) \quad \text{ subject to} ~\ystar(x)\in \argmin\nolimits_{y: h(x, y) \leq 0} g(x, y). 
+\end{align}
+As noted earlier, for this larger problem class, the hyperobjective $F$ can be nonsmooth nonconvex, necessitating  our measure of convergence to be the now popular notion of Goldstein stationarity~\cite{zhang2020complexity}. 
+
+Our first algorithm for solving \cref{prob:ineq}  is  presented in \cref{alg: IZO}, with its convergence guarantee in \cref{thm:izo_complete_guarantees}.
+At a high level, this algorithm first obtains access to an inexact zeroth-order oracle to $F$ (we shortly explain how this is done) and uses this oracle to construct a (biased) gradient estimate of $F$. It then uses this gradient estimate to update the iterates with a rule motivated by  recent works reducing nonconvex optimization to online optimization~\cite{cutkosky2023optimal}. We explain this in \cref{sec:ncns_inexact_ZO}. 
+
+
+\begin{algorithm}[h]
+\begin{algorithmic}[1]\caption{Nonsmooth Nonconvex Algorithm with Inexact Zero-Order oracle}\label{alg: IZO}
+\State \textbf{Input:}
+Initialization $x_0\in\reals^d$, clipping parameter $D>0$,
+step size $\eta>0$, smoothing parameter $\rho>0$, accuracy parameter $\nu>0$,
+iteration budget $T\in\NN$, inexact zero-order oracle $\tF:\reals^d\to\reals$.
+\State \textbf{Initialize:} ${\Delta}_1=\mathbf{0}$
+\For{$t=1,\dots,T$}
+\State Sample $s_t\sim\Unif[0,1]$,~~$w_t\sim\Unif(\S^{d-1})$
+\State $x_t=x_{t-1}+{\Delta}_t$, ~~$z_t=x_{t-1}+s_t{\Delta}_t$
+\State $\tbg_t=\tfrac{d}{2\rho}(\tF(z_t+\rho w_t)-\tF( z_t-\rho w_t))w_t$
+\State ${\Delta}_{t+1}
+=\mathrm{clip}_{D}\left({\Delta}_t-\eta\tbg_t\right) 
+$
+\Comment{$\mathrm{clip}_D(z):=\min\{1,\tfrac{D}{\norm{z}}\}\cdot z$}
+\EndFor
+\State $M=\lfloor\frac{\nu}{D}\rfloor,~K=\lfloor\frac{T}{M}\rfloor$
+\For{$k=1,\dots,K$}
+\State $\overline{x}_{k}=\frac{1}{M}\sum_{m=1}^{M} z_{(k-1)M+m}$
+\EndFor
+\State Sample $ x^{\out}\sim\Unif\{\overline{ x}_1,\dots,\overline{ x}_{K}\}$
+\State \textbf{Output:} $ x^{\out}$. 
+\end{algorithmic}
+\end{algorithm}
+
+\begin{theorem}\label{thm:izo_complete_guarantees}
+    Consider \cref{{prob:ineq}} under \cref{assumption:linEq_smoothness,assumption:ineq_mild}.  Let $\kappa=C_g/\mu_g$ be the condition number of $g$. Then combining  the procedure for \cref{{lem:ZeroOrderApprox}}
+with \cref{alg: IZO} run with 
+$\rho=\min\left\{\tfrac{\delta}{2},\tfrac{F(x_0)-\inf F}{L_fL_y}\right\},\nu=\delta-\rho,~D=\Theta\left(\frac{\nu\epsilon^2\rho^2}{d_x\rho^2 L_f^2L_y^2+\alpha^2 d_x^2}\right)$, and $\eta=\Theta\left(\frac{\nu\epsilon^3\rho^4}{(d_x\rho^2L_f^2L_y^2+\alpha^2d_x^2)^2}\right)$ 
+outputs $x^{\out}$ such that $\E[\mathrm{dist}(0,{\partial}_\delta F(x^{\out}))]\leq\epsilon+\alpha$ with $T$ { oracle calls to } $f$ { and } $g$, where:
+\[T=
+O\left(\frac{\sqrt{\kappa}d_x(F(x_0)-\inf F)}{\delta\epsilon^3}\cdot \left(L_f^2L_y^2+\alpha^2 \left(\frac{d_x}{\delta^{2}}+\frac{d_x L_f^2L_y^2}{(F(x_0)-\inf F)^2}\right)\right)\cdot\log(L_f/\alpha)\right).
+\]  
+\end{theorem}
+\Cref{alg: IZO} is a variant of gradient descent with momentum and clipping, with $\widetilde{g}_t$ the inexact gradient, $\Delta_t$ a clipped accumulated gradient (hence accounts for past gradients, which serve as a momentum), and  the clipping ensuring that consecutive iterates of the algorithm reside within a $\delta$-ball of each other. While similar algorithms have appeared in prior work on nonsmooth nonconvex optimization (e.g.~\cite{cutkosky2023optimal}), none of them account for inexactness in the gradient, crucial in our setting.
+
+\subsection{Nonsmooth nonconvex optimization with inexact zeroth-order oracle}\label{sec:ncns_inexact_ZO}
+We can obtain inexact zeroth-order oracle access to $F$  because (as formalized in \cref{lem:ZeroOrderApprox}) despite potential nonsmoothness and nonconvexity of  $F$ in \cref{prob:ineq},  estimating its \emph{value} $F(x)$  at any point $x$ amounts to solving a single smooth and strongly convex optimization problem, which can be done can be done in $\widetilde{O}(1)$ oracle calls to $f$ and $g$ by appealing to a result by \citet{zhang2022solving}.
+
+\begin{restatable}[Proof in \Cref{{sec:zeroth-order-algs}}]{lemma}{lemZeroOrderApprox}\label{lem:ZeroOrderApprox}
+    Given any $x$, we can return $\widetilde{F}(x)$ such that $|F(x)-\widetilde{F}(x)|\leq\alpha$ using $O(\sqrt{C_g/\mu_g}\log(L_f/\alpha))$ first-order oracle calls to $f$ and $g$.
+\end{restatable}
+
+
+Having computed an inexact value of the  hyperobjective $F$, we now show how to use it to develop an algorithm for solving  \cref{{prob:ineq}}. To this end, we first note that  $F$, despite being 
+ possibly nonsmooth and nonconvex, is Lipschitz and hence amenable to the use of recent algorithmic developments  in nonsmooth nonconvex optimization pertaining to Goldstein stationarity. 
+\begin{restatable}{lemma}{lemLipscConstrBilevel}\label{lem:LipscConstrBilevel}Under \cref{assumption:linEq_smoothness} and \ref{item:assumption_safe_constraints}, $F$ in  \cref{{prob:ineq}} is $O(L_fL_y)$-Lipschitz in $x$.
+\end{restatable}
+
+\looseness=-1With this guarantee on the Lipschitzness of $F$, we prove \cref{{thm: Lipschitz-min-with-inexact-zero-oracle}} for attaining Goldstein stationarity using the inexact zeroth-order oracle of a Lipschitz function. Our proof of \cref{{thm: Lipschitz-min-with-inexact-zero-oracle}} crucially uses the recent online-to-nonconvex framework of \citet{cutkosky2023optimal}. Combining \cref{lem:ZeroOrderApprox} and \cref{thm: Lipschitz-min-with-inexact-zero-oracle} then immediately implies \cref{thm:izo_complete_guarantees}. 
+
+% \begin{theorem}\label{thm: Lipschitz-min-with-inexact-zero-oracle}
+% Suppose $F:\reals^d\to\reals$ is $L$-Lipschitz, 
+% and that $|\widetilde{F}(\cdot)-F(\cdot)|\leq\alpha$.
+% Then running \cref{alg: IZO} with
+% $\rho=\min\left\{\tfrac{\delta}{2},\tfrac{F(x_0)-\inf F}{L}\right\},\nu=\delta-\rho,~D=\Theta\left(\frac{\nu\epsilon^2\rho^2}{d\rho^2 L^2+\alpha^2 d^2}\right),\eta=\Theta\left(\frac{\nu\epsilon^3\rho^4}{(d\rho^2L^2+\alpha^2d^2)^2}\right)$,
+% outputs a point $x^{\out}$ such that $\E[\mathrm{dist}(0,{\partial}_\delta F(x^{\out}))]\leq\epsilon+\alpha$ with
+% \[T=
+% O\left(\frac{d(F(x_0)-\inf F)}{\delta\epsilon^3}\cdot \left(L^2+\alpha^2 (\frac{d}{\delta^{2}}+\frac{dL^2}{(F(x_0)-\inf F)^2})\right)\right)
+% \text{ calls to } \tF(\cdot).\] 
+% \end{theorem}
+
+
+\subsection{Nonsmooth nonconvex optimization with inexact \emph{gradient}  oracle}
+In \cref{{sec:inequality-bilevel}}, we provide a way to generate approximate gradients of $F$. Here, we present an algorithm that attains Goldstein stationarity of \cref{prob:ineq} using this inexact gradient oracle.  While there has been a long line of recent work on algorithms for nonsmooth nonconvex optimization with convergence to Goldstein stationarity~\cite{zhang2020complexity, davis2022gradient, jordan2023deterministic, kong2023cost, grimmer2023goldstein}, these results necessarily require \textit{exact} gradients. 
+This brittleness to any error in gradients renders them ineffective in our setting, where our computed (hyper)gradient necessarily suffers from an
+additive error.
+While inexact oracles are known to be effective for smooth or convex objectives \citep{devolder2014first}, utilizing inexact gradients in the nonsmooth nonconvex regime presents a nontrivial challenge.
+Indeed, without any local bound on gradient variation due to smoothness, or convexity that ensures that gradients are everywhere correlated with the direction pointing at the minimum, it is not clear a priori how to control the accumulating price of inexactness throughout the run of an algorithm.
+To derive such results, we  use the recently proposed connection between online learning and nonsmooth nonconvex optimization by \citet{cutkosky2023optimal}. By controlling the accumulated error suffered by online gradient descent for \emph{linear} losses (cf. \cref{lem: inexact OGD}), 
+we derive guarantees for our setting of interest, providing Lipschitz optimization algorithms that converge to Goldstein stationary points even with inexact gradients.  
+
+
+This algorithm matches the best known complexity in first-order nonsmooth nonconvex optimization \cite{zhang2020complexity,davis2022gradient,cutkosky2023optimal}, merely replacing the convergence to a $(\delta,\epsilon)$-stationary point by $(\delta,\epsilon+\alpha)$-stationarity, where $\alpha$ is the inexactness of the gradient oracle.
+
+\begin{algorithm}[h]
+\begin{algorithmic}[1]\caption{Nonsmooth Nonconvex Algorithm with Inexact Gradient Oracle}\label{alg: OIGRM}
+\State \textbf{Input:}
+Initialization $x_0\in\reals^d$, clipping parameter $D>0$,
+step size $\eta>0$,
+accuracy parameter $\delta>0$,
+iteration budget $T\in\NN$, inexact gradient oracle $\widetilde{\nabla}F:\reals^d\to\reals^d$.
+\State \textbf{Initialize:} ${\Delta}_1=\mathbf{0}$
+\For{$t=1,\dots,T$}
+\State Sample $s_t\sim\Unif[0,1]$ 
+\State $x_t=x_{t-1}+{\Delta}_t$, ~~$z_t=x_{t-1}+s_t{\Delta}_t$
+\State $\tbg_t=\widetilde{\nabla}F(z_t)$
+\State ${\Delta}_{t+1}
+=\mathrm{clip}_{D}\left({\Delta}_t-\eta\tbg_t\right) 
+$
+\Comment{$\mathrm{clip}_D(z):=\min\{1,\tfrac{D}{\norm{z}}\}\cdot z$}
+\EndFor
+\State $M=\lfloor\frac{\delta}{D}\rfloor,~K=\lfloor\frac{T}{M}\rfloor$
+\For{$k=1,\dots,K$}
+\State $\overline{x}_{k}=\frac{1}{M}\sum_{m=1}^{M} z_{(k-1)M+m}$
+\EndFor
+\State Sample $ x^{\out}\sim\Unif\{\overline{ x}_1,\dots,\overline{ x}_{K}\}$
+\State \textbf{Output:} $ x^{\out}$. 
+\end{algorithmic}
+\end{algorithm}
+
+
+\begin{restatable}{theorem}{thmLipscMinWithInexactGradOracle}\label{thm:Lipschitz-min-with-inexact-grad-oracle}
+Suppose $F:\reals^d\to\reals$ is $L$-Lipschitz  
+and that $\|\widetilde{\nabla} F(\cdot)-\nabla F(\cdot)\|\leq\alpha$. 
+Then running \cref{alg: OIGRM} with
+$D=\Theta(\frac{\delta\epsilon^2}{L^2}),\eta=\Theta(\frac{\delta\epsilon^3}{L^4})$,
+outputs a point $x^{\out}$ such that $\E[\mathrm{dist}(0,{\partial}_\delta F(x^{\out}))]\leq\epsilon+\alpha$, with
+$T=O\left(\frac{(F(x_0)-\inf F) L^2}{\delta\epsilon^3}\right)$
+calls to $\widetilde{\nabla}F(\cdot)$.
+\end{restatable}
+
+We defer the proof of \cref{thm:Lipschitz-min-with-inexact-grad-oracle} to \cref{{sec:zeroth-order-algs}}.
+Plugging the complexity of computing inexact gradients,
+as given by \cref{thm:cost_of_computing_ystar_gammastar_inequality},
+into the result above,
+we immediately obtain convergence to a $(\delta,\epsilon)$-stationary point of \cref{prob:general-constraints} with $\widetilde{O}(\delta^{-1}\epsilon^{-4})$ gradient calls overall.
+
+
+
+\paragraph{Implementation-friendly algorithm.}
+While \cref{{alg: OIGRM}} matches the best-known results in nonsmooth nonconvex optimization, it could be  impractical  due to several hyperparameters which need tuning. 
+Arguably, a more natural application of the hypergradient estimates would be simply plugging them into gradient descent, which requires tuning only the stepsize. Since  $F$ is neither smooth nor convex, perturbations are required to guarantee differentiability along the trajectory.
+We therefore complement \cref{thm:Lipschitz-min-with-inexact-grad-oracle} by analyzing perturbed (inexact) gradient descent  in the nonsmooth nonconvex setting (\cref{{alg: PIGD}}) and state its theoretical guarantee in \Cref{thm:practical_Lipschitz-min-with-inexact-grad-oracle}. Despite its suboptimal worst-case theoretical guarantees, we find this algorithm  easier to implement in practice. 

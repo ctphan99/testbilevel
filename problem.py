@@ -71,26 +71,19 @@ class StronglyConvexBilevelProblem:
         
         self.c_lower = torch.randn(self.dim, device=self.device, dtype=self.dtype) * param_scale
         
-        # Override constraints to box: |y_i| ≤ 1 for all i
-        # Model as stacked inequalities: y ≤ 1 and -y ≤ 1 → [I; -I] y ≤ [1; 1]
+        # Box constraints: |y_i| ≤ 1 for all i (y ≤ 1 and -y ≤ 1)
         self.num_constraints = 2 * self.dim
-        self.A = torch.zeros(self.num_constraints, self.dim, device=self.device, dtype=self.dtype)
-        I = torch.eye(self.dim, device=self.device, dtype=self.dtype)
-        self.B = torch.cat([I, -I], dim=0)
-        self.b = torch.ones(self.num_constraints, device=self.device, dtype=self.dtype)
         
         # Print problem information
         print(f"Natural Bilevel Problem (dim={self.dim}, constraints={self.num_constraints})")
         
-        # Check box constraint at origin
-        origin_violations = torch.zeros_like(self.b)
-        max_violation = torch.max(origin_violations)
+        # Check box constraint feasibility at origin
+        x0 = torch.zeros(self.dim, device=self.device, dtype=self.dtype)
+        y0 = torch.zeros(self.dim, device=self.device, dtype=self.dtype)
+        h0 = self.constraints(x0, y0)
+        max_violation = torch.max(torch.clamp(h0, min=0)).item()
         print(f"Constraint violations at origin: {max_violation:.6f}")
-        
-        if max_violation > 1e-6:
-            print("Natural constraint violations present - F2CSA penalty mechanism will engage")
-        else:
-            print("Origin is feasible - constraints may not be active")
+        print("Origin is feasible - constraints may not be active" if max_violation <= 1e-6 else "Natural constraint violations present - F2CSA penalty mechanism will engage")
 
         # Verify strong convexity
         upper_eigenvals = torch.linalg.eigvals(self.Q_upper).real
@@ -139,41 +132,116 @@ class StronglyConvexBilevelProblem:
         return g
 
     def constraints(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Constraint function: h(x,y) = Ax + By - b"""
+        """Box constraints: y ≤ 1 and -y ≤ 1"""
         # Ensure tensors are on same device and dtype
         x = x.to(device=self.device, dtype=self.dtype)
         y = y.to(device=self.device, dtype=self.dtype)
-        return self.A @ x + self.B @ y - self.b
+        # Explicit box constraints: y ≤ 1 and -y ≤ 1 → h(y) = [y - 1; -y - 1] ≤ 0
+        return torch.cat([y - 1.0, -y - 1.0], dim=0)
     
     def constraint_violations(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Get constraint violations: max(0, h(x,y))"""
         h = self.constraints(x, y)
         return torch.clamp(h, min=0)
     
-    def solve_lower_level(self, x: torch.Tensor, solver: str = 'accurate', 
-                         max_iter: int = 10000, tol: float = 1e-8, alpha: float = 0.1) -> Tuple[torch.Tensor, Dict]:
+    def project_X(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Projection of UL variable onto feasible set X. For current setup, X is unconstrained,
+        so this is identity. Override if UL constraints are added.
+        """
+        return x.to(device=self.device, dtype=self.dtype)
+    
+    def solve_lower_level(self, x: torch.Tensor, solver: str = 'cvxpy', 
+                         max_iter: int = 10000, tol: float = 1e-8, alpha: float = 0.1) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """
         Solve lower-level problem: min_y g(x,y) subject to h(x,y) ≤ 0
         
         Args:
             x: Upper-level variable
-            solver: Solver type ('accurate' for F2CSA.tex Algorithm 1 compliance)
+            solver: Solver type ('cvxpy' for accurate, 'pgd' for gradient descent)
             max_iter: Maximum iterations
             tol: Convergence tolerance
             alpha: Accuracy parameter (δ = α³)
             
         Returns:
-            y_opt: Approximate solution
+            y_opt: Optimal solution
+            lambda_opt: Lagrange multipliers
             info: Solution information
         """
-        if solver == 'accurate':
-            return self._solve_accurate(x, alpha, max_iter, tol)
+        if solver == 'cvxpy':
+            return self._solve_cvxpy(x, alpha)
         elif solver == 'pgd':
             return self._solve_pgd(x, max_iter, tol)
+        elif solver == 'accurate':
+            return self._solve_accurate(x, alpha, max_iter, tol)
         else:
             raise ValueError(f"Unknown solver: {solver}")
     
-    def _solve_accurate(self, x: torch.Tensor, alpha: float, max_iter: int, tol: float) -> Tuple[torch.Tensor, Dict]:
+    def _solve_cvxpy(self, x: torch.Tensor, alpha: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+        """
+        Solve using CVXPY with SCS solver - centralized for all algorithms
+        Uses NOISY Q_lower for stochastic setting
+        """
+        try:
+            import cvxpy as cp
+            
+            # CRITICAL: Use noisy Q_lower for stochastic setting
+            _, noise_lower = self._sample_instance_noise()
+            Q_lower_noisy = self.Q_lower + noise_lower
+            
+            # Ensure Q_lower_noisy remains positive definite
+            min_eigenval = torch.linalg.eigvals(Q_lower_noisy).real.min()
+            if min_eigenval <= 1e-8:
+                Q_lower_noisy = Q_lower_noisy + (1e-6 - min_eigenval) * torch.eye(Q_lower_noisy.shape[0], device=Q_lower_noisy.device, dtype=Q_lower_noisy.dtype)
+            
+            Q_lower_np = Q_lower_noisy.detach().cpu().numpy()
+            c_lower_np = self.c_lower.detach().cpu().numpy()
+            
+            # Create variables
+            y = cp.Variable(self.dim)
+            
+            # Objective: min_y 0.5 * y^T Q_lower_noisy y + c_lower^T y
+            objective = cp.Minimize(0.5 * cp.quad_form(y, Q_lower_np) + c_lower_np.T @ y)
+            
+            # Explicit box constraints
+            constraints = [y <= 1, -y <= 1]
+            
+            # Solve using SCS solver
+            problem_cvx = cp.Problem(objective, constraints)
+            problem_cvx.solve(verbose=False, solver=cp.SCS, warm_start=True)
+            
+            if problem_cvx.status == cp.OPTIMAL:
+                y_opt = torch.tensor(y.value, dtype=self.dtype, device=self.device)
+                
+                # Extract dual variables (stack both box sides)
+                import numpy as _np
+                lambda_np = _np.concatenate([constraints[0].dual_value, constraints[1].dual_value])
+                lambda_opt = torch.tensor(lambda_np, dtype=self.dtype, device=self.device)
+                
+                # Compute constraint violations
+                h_val = self.constraints(x, y_opt)
+                violations = torch.clamp(h_val, min=0)
+                max_violation = torch.max(violations).item()
+                
+                info = {
+                    'status': 'optimal',
+                    'iterations': 0,  # CVXPY doesn't report iterations
+                    'lambda': lambda_opt,
+                    'constraint_violations': violations,
+                    'converged': True,
+                    'max_violation': max_violation,
+                    'solver': 'CVXPY-SCS'
+                }
+                
+                return y_opt, lambda_opt, info
+            else:
+                raise ValueError(f"CVXPY solve failed with status: {problem_cvx.status}")
+                
+        except ImportError:
+            print("CVXPY not available, falling back to PGD")
+            return self._solve_pgd(x, 1000, 1e-6)
+    
+    def _solve_accurate(self, x: torch.Tensor, alpha: float, max_iter: int, tol: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """Solve using accurate solver implementing F2CSA.tex Algorithm 1"""
         try:
             from accurate_lower_level_solver import AccurateLowerLevelSolver
@@ -181,25 +249,35 @@ class StronglyConvexBilevelProblem:
             solver = AccurateLowerLevelSolver(self, device=self.device, dtype=self.dtype)
             y_opt, lambda_opt, info = solver.solve_lower_level_accurate(x, alpha, max_iter, tol)
             
-            return y_opt, info
+            return y_opt, lambda_opt, info
             
         except ImportError:
             print("Accurate solver not available, falling back to PGD")
             return self._solve_pgd(x, max_iter, tol)
 
-    def _solve_pgd(self, x: torch.Tensor, max_iter: int, tol: float) -> Tuple[torch.Tensor, Dict]:
+    def _solve_pgd(self, x: torch.Tensor, max_iter: int, tol: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """
         Solve using projected gradient descent (natural, no artificial feasibility)
+        Uses NOISY Q_lower for stochastic setting
         """
+        # CRITICAL: Use noisy Q_lower for stochastic setting
+        _, noise_lower = self._sample_instance_noise()
+        Q_lower_noisy = self.Q_lower + noise_lower
+        
+        # Ensure Q_lower_noisy remains positive definite
+        min_eigenval = torch.linalg.eigvals(Q_lower_noisy).real.min()
+        if min_eigenval <= 1e-8:
+            Q_lower_noisy = Q_lower_noisy + (1e-6 - min_eigenval) * torch.eye(Q_lower_noisy.shape[0], device=Q_lower_noisy.device, dtype=Q_lower_noisy.dtype)
+        
         # Initialize at unconstrained optimum
-        y = -torch.linalg.solve(self.Q_lower, self.c_lower)
+        y = -torch.linalg.solve(Q_lower_noisy, self.c_lower)
 
         # Use small learning rate for stability
         lr = 0.01
 
         for i in range(max_iter):
-            # Gradient of lower-level objective
-            grad_g = self.Q_lower @ y + self.c_lower
+            # Gradient of lower-level objective with noisy Q
+            grad_g = Q_lower_noisy @ y + self.c_lower
             
             # Gradient step
             y_new = y - lr * grad_g
@@ -220,58 +298,10 @@ class StronglyConvexBilevelProblem:
             'iterations': i + 1,
             'lambda': lambda_opt,
             'constraint_violations': self.constraint_violations(x, y),
-            'converged': grad_norm < tol
+            'converged': grad_norm < tol,
+            'solver': 'PGD'
         }
         
-        return y, info
+        return y, lambda_opt, info
     
-    def _project_onto_constraints(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """
-        Project y onto feasible region {y : h(x,y) ≤ 0}
-        Uses simple projection: if h(x,y) > 0, move towards feasibility
-        """
-        h = self.constraints(x, y)
-        violations = torch.clamp(h, min=0)
-
-        if torch.norm(violations) < 1e-10:
-            return y  # Already feasible
-
-        # Move in direction of constraint normals to restore feasibility
-        correction = torch.zeros_like(y)
-        for i in range(self.num_constraints):
-            if violations[i] > 0:
-                # Move in direction of B[i] to satisfy constraint i
-                B_norm_sq = torch.norm(self.B[i])**2
-                if B_norm_sq > 1e-10:
-                    correction += violations[i] * self.B[i] / B_norm_sq
-        
-        return y - correction
-    
-    def get_true_solution(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Get true solution for testing (solves KKT conditions exactly)
-        """
-        # This is a simplified version - in practice, you'd solve the KKT system
-        y_opt, info = self.solve_lower_level(x, solver='pgd', max_iter=2000, tol=1e-8)
-        lambda_opt = info['lambda']
-        return y_opt, lambda_opt
-    
-    def compute_gap(self, x: torch.Tensor) -> float:
-        """
-        Compute optimization gap for F2CSA algorithm
-        """
-        # Solve lower-level problem
-        y_opt, info = self.solve_lower_level(x, solver='pgd')
-        
-        # Compute upper-level objective
-        f_val = self.upper_objective(x, y_opt)
-        
-        # Compute constraint violations
-        h_val = self.constraints(x, y_opt)
-        violations = torch.clamp(h_val, min=0)
-        max_violation = torch.max(violations).item()
-        
-        # Gap is combination of objective value and constraint violations
-        gap = f_val.item() + 1000.0 * max_violation  # Penalty for violations
-        
-        return gap
+ 

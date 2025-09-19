@@ -1,0 +1,157 @@
+\section{Some old attempt}
+\subsection{Removing dependency on the derivative of Lagrangian multiplier}
+\cref{eqn:derivative-bound1} offers a way to estimate the difference in derivatives of the objectives $\phi_{\gamma(x)}(x) = \phi(x)$.
+However, the challenge here is the dependency on $\gamma(x)$ and its derivative $\nabla_x \gamma(x)$. 
+In order to compute the derivative to the dual solution $\gamma(x)$, it still requires to compute the second-order term, which still does not solve the issue.
+
+To resolve this issue, we define another Lagrangian:
+\begin{align}\label{eqn:constrained-lagrangian}
+    \mathcal{L}_\lambda(x,y) = f(x,y) + \lambda (g(x,y) - g^*(x)) ~ \text{where}~g^*(x) = \min_{y: h(x,y) \leq 0} g(x,y)
+\end{align}
+
+We compute the derivative of $\mathcal{L}_\lambda(x,y)$ by:
+\begin{align}
+    \nabla_x \mathcal{L}_\lambda(x,y) = \nabla_x f(x,y) + \lambda \left(\nabla_x g(x,y) - \nabla_x g(x,y^*_{\gamma(x)}) - {\color{orange} \nabla_y g(x, y^*_{\gamma(x)}) \cdot \frac{d y^*_{\gamma(x)}}{d x}} \right)
+\end{align}
+
+\begin{align}
+    \nabla_y g(x,y^*_{\gamma(x)}) + \gamma(x) \nabla_y h(x,y^*_{\gamma(x)}) = 0
+\end{align}
+
+\begin{align}
+    \gradx \mathcal{L}_{\lambda,\gamma}(x,y) = \gradx f(x,y) + \lambda(\gradx g(x,y) + {\color{blue}\gamma\gradx h(x,y)} + {\color{red}h(x,y)\gradx\gamma}-\gradx g(x,\ysg) - {\color{blue}\gamma\gradx h(x,\ysg)} - {\color{red}h(x,\ysg)\gradx\gamma})
+\end{align}
+
+Comparing this term to the other derivative:
+\begin{align}
+    \nabla_x \mathcal{L}_{\lambda,\gamma}(x, \yslg) - \nabla_x \mathcal{L}_\lambda(x,\yslg)
+\end{align}
+
+\begin{theorem}
+    \begin{align}
+    \norm{\frac{d \phi_{\gamma(x)}(x)}{d x} - \nabla_x \mathcal{L}_{\lambda}(x, y^*_{\lambda}(x)) + M \cdot\grady\Llg(x,y)} = O(\frac{1}{\lambda}) + \left(\nabla_x h(x,y) - \nabla_x h(x,y^*_{\lambda})\right) \gamma(x)
+    \end{align}
+    where $y^*_{\lambda}(x) = \arg\min_y \mathcal{L}_{\lambda}(x, y)$.
+\end{theorem}
+\begin{proof}
+    TODO
+\end{proof}
+
+Now the expression does not depend on the derivative of the dual solution $\gamma(x)$. It only depends on the value of the dual solution. Under the assumption that the dual solution is bounded, and the constraint function $h$ is smooth, we can bound:
+\begin{theorem}
+    \begin{align}
+    \norm{\frac{d \phi(x)}{d x} - \nabla_x \mathcal{L}_{\lambda}(x, y^*_{\lambda}(x))} = O(\frac{1}{\lambda}) + \left(\nabla_x h(x,y) - \nabla_x h(x,y^*_{\lambda})\right) \gamma(x)
+    \end{align}
+    where $y^*_{\lambda}(x) = \arg\min_y \mathcal{L}_{\lambda}(x, y)$.
+\end{theorem}
+\begin{proof}
+    TODO
+\end{proof}
+which is due to $\phi_{\gamma(x)}(x) = \phi(x)$ and $\norm{\nabla_x h(x,y) - \nabla_x h(x,y^*_{\lambda}} \leq c \norm{y - y^*_{\lambda}}$.
+
+What this tells us is that we just need to compute the derivative of the Lagrangian in \cref{eqn:constrained-lagrangian} to get an approximate to the derivative of the constrained bilevel optimization problem in Equation~\ref{eqn:constrained-bilevel-optimization}.
+
+% further analyze the derivative $\nabla_x \mathcal{L}_{\lambda, \gamma}(x, y^*_{\lambda,\gamma}(x))$:
+
+% \begin{align}
+%     \frac{d}{dx}\mathcal{L}_{\lambda, \gamma}(x, y^*_{\lambda,\gamma}(x)) = \nabla_x \mathcal{L}_{\lambda, \gamma}(x, y^*_{\lambda,\gamma}(x))
+% \end{align}
+
+\section{Feb 26th discussion}
+
+\begin{align}
+    g_{a,b}^*(x,y,z) = \min_{\theta} \max_{\gamma} g(x,\theta) + \gamma h(x,\theta) + \frac{1}{a} \norm{\theta - y}^2 - \frac{1}{b} \norm{\gamma - z}^2
+\end{align}
+
+\begin{align}
+    \mathcal{L}_\lambda(x,y,z) = f(x,y) + \lambda (g(x,y) + z h(x,y) - g_{a,b}^*(x,y,z))
+\end{align}
+
+First, given $x_1$, $x_2$, $\lambda_1, \lambda_2$, we want to show $y^*_{\lambda_1}(x_1)$ and $y^*_{\lambda_2}(x_2)$, $\gamma_{\lambda_1}(x_1)$ and $\gamma_{\lambda_2}(x_2)$ are close?
+
+
+\section{Old materials (to be organized)}
+
+
+The main challenge in this formulation is the presence of constraints $h(x,y)$. If we do not have constrains in the lower optimization problem, the derivative $\frac{dy^*}{dx}$ can be simply written as $(\nabla^2_{yy} g)^{-1} \nabla^2_{xy} g$. There are also nice properties like $\norm{\nabla_x \phi(x) - \nabla_x \mathcal{L}_\lambda(x,\bar{y}^*(x))} = O(\frac{1}{\lambda})$~\cite{chen2023near,kwon2023fully} which we will talk about it later.
+
+
+One potential solution to resolve the constraints in the inner optimization problem is to define a Lagrangian problem with a multiplier $\gamma \geq 0$ to convert constraints $h(x,y)$ to the objective in the lower optimization problem, which can be found below.
+% \begin{align}\label{eqn:unconstrained-bilevel-optimization}
+%     \min_{x} & \quad \bar{\phi}_\gamma(x) \coloneqq f(x, \bar{y}^*_\gamma(x)) \\
+%     \text{where} & \quad \bar{y}^*_\gamma(x) = \arg\min_{y} g(x, y) + \gamma h(x,y) \nonumber
+% \end{align}
+
+The derivative of \cref{eqn:unconstrained-bilevel-optimization} can be easily computed by:
+\begin{align}
+    \frac{d \bar{\phi}_\gamma(x)}{d x} & = \frac{\partial f}{\partial x} + \frac{\partial f}{\partial y} \frac{d \bar{y}_\gamma}{d x} \nonumber \\
+    & = \frac{\partial f}{\partial x} + \frac{\partial f}{\partial y} (\nabla^2_{yy} g + \gamma \nabla_{yy}^2 h)^{-1} (\nabla^2_{xy} g + \gamma \nabla_{xy}^2 h)
+\end{align}
+
+We can also define a similar reformulation as shown in~\cite{chen2023near,kwon2023fully}:
+% \begin{align}
+%     \min_{x \in \mathcal{X}} \bar{\phi}_\gamma(x) \coloneqq & \min_y \objective(x, y) \\
+%     \text{s.t.} & \quad \bar{g}_\gamma(x,y) \leq \bar{g}^*_\gamma(x) % y = \arg\min_{y} \Bar{g}_\gamma(x,y)
+% \end{align}
+
+Since this is a unconstrained belevel optimization problem with strong convexity, we can use the result from~\cite{chen2023near,kwon2023fully} to show:
+% \begin{theorem}[Known result]
+% \begin{align}
+%     \norm{\frac{d \bar{\phi}_\gamma(x)}{d x} - \nabla_x \mathcal{L}_{\lambda,\gamma}(x, \bar{y}^*_{\lambda,\gamma}(x))} = O(\frac{1}{\lambda})
+% \end{align}
+where $\bar{y}^*_{\lambda,\gamma}(x) \coloneqq \arg\min_{y} \mathcal{L}_{\lambda,\gamma}(x,y)$. \pswt{I think this is true only for the Lagrangian defined for $\bar{\phi}_\gamma$ since following \cite{kwon2023fully}'s proof requires us to use $\nabla_y \mathcal{L}_{\lambda, \gamma}(x,y) = \nabla_y f(x,y) + \lambda\cdot(\nabla_y g(x, y) + \gamma \nabla_y h(x,y))$} 
+
+% \end{theorem}
+Therefore, we just need to use the gradient computed from solving the Lagrangian problem without doing differentiable optimization.
+
+Compared to \cref{eqn:constrained-bilevel-optimization}, \cref{eqn:unconstrained-bilevel-optimization} has no constraints in the inner optimization problem due to the use of Lagrangian. But it may also have a different solution $\bar{y}_\gamma$ that is different from the original one $y^*$.
+
+\begin{theorem}[Our final goal]
+    \begin{align}
+    \norm{\frac{d \phi}{d x} - \nabla_x \mathcal{L}_{\lambda,\gamma}(x, \bar{y}^*_{\lambda,\gamma}(x))} = \text{poly}(\frac{1}{\lambda}, \frac{1}{\gamma})
+\end{align}
+\end{theorem}
+If this is true, then we can select $\lambda$ and $\gamma$ to control the error or biasness of the gradient estimated from the Lagrangian. Computing the gradient from the Lagrangian also only involves first-order gradient computation:
+\begin{align}
+    \nabla_x \mathcal{L}_{\lambda,\gamma}(x, \bar{y}^*_{\lambda,\gamma}(x)) = \frac{\partial \mathcal{L}_{\lambda,\gamma}}{\partial x} + \frac{\partial \mathcal{L}_{\lambda,\gamma}}{\partial y} \frac{d \bar{y}^*_{\lambda,\gamma}(x)}{d x} = \frac{\partial \mathcal{L}_{\lambda,\gamma}}{\partial x}
+\end{align}
+where $\frac{\partial \mathcal{L}_{\lambda,\gamma}}{\partial y} = 0$ at the optimal solution $y = \bar{y}^*_{\lambda,\gamma}(x)$ since it is an unconstrained problem.
+
+
+
+\begin{definition}[Some notations]
+\begin{align}
+    \Bar{g}_\gamma(x,y) = g(x,y) + \gamma h(x,y), \quad \mathcal{L}_{\lambda,\gamma}(x,y) = f(x,y) + \lambda \Bar{g}_\gamma(x,y)
+\end{align}
+\begin{align}
+    g^*(x) = \min_{y: h(x,y) \leq 0} g(x,y), \quad \Bar{g}^*_\gamma(x) = \min_{y} \Bar{g}_\gamma(x,y), \quad \Bar{g}^*_{\lambda,\gamma}(x) = \min_{y} \mathcal{L}_{\lambda,\gamma}(x,y)
+\end{align}
+\begin{align}
+    y^*(x) = \arg\min_{y: h(x,y) \leq 0} g(x,y), \quad \Bar{y}^*_\gamma(x) = \arg\min_{y} \Bar{g}_\gamma(x,y), \quad \Bar{y}^*_{\lambda,\gamma}(x) = \arg\min_{y} \mathcal{L}_{\lambda,\gamma}(x,y)
+\end{align}
+\end{definition}
+
+
+{\color{red}
+\begin{itemize}
+    \item Can we bound the difference between $y^*(x)$, $\bar{y}^*_\gamma(x)$, and $\bar{y}^*_{\lambda,\gamma}(x)$?
+    \item This seems to be an essential step if we want to follow the proof in~\cite{chen2023near,kwon2023fully}.
+\end{itemize}
+}
+
+
+\subsection{Another reformulation}
+
+{\color{red}
+\begin{align} 
+    \min_{x \in \mathcal{X}} \phi(x) \coloneqq & \min_y \objective(x, y) \\
+    \text{s.t.} & \quad g(x,y) \leq g^*(x), \quad h(x,y) \leq 0 \label{eqn:two_constraints}
+\end{align}
+\begin{itemize}
+    \item This is in fact (to be checked) equivalent to the Lagrangian $\mathcal{L}_{\lambda,\gamma}(x,y) = f(x,y) + \lambda \Bar{g}_\gamma(x,y)$.
+    \item Can we show that the derivative derived from \cref{eqn:double-lagrangian-reformulation} is also close to the derivative in \cref{eqn:full-derivative} and \cref{eqn:schur-compliment}?
+\end{itemize}
+\begin{align}\label{eqn:double-lagrangian-reformulation}
+    \min_{x,y} f(x,y) + \lambda (g(x,y) - g^*(x)) + \gamma h(x,y)
+\end{align}
+}

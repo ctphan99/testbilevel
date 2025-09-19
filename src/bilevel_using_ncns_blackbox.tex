@@ -1,0 +1,11 @@
+%%% SUBSUMED BY OTHER SECTIONS %%%
+
+\section{An Attempt via Nonconvex Nonsmooth Optimization}\label{sec:ncns_blackbox}
+The objective $F$ in the lower-level constrained bilevel problem, \cref{prob:orig_bilevel},
+is nonsmooth and nonconvex in $x$. In this section, we, therefore, propose solving \cref{prob:orig_bilevel} using recent developments in nonsmooth nonconvex optimization. A crucial requirement to be able to use these developments is that $F$ be Lipschitz. \pswt{note: the algorithm of DDLPY requires only Lipschitzness of the objective in question; is it possible that we can therefore get a result for the following setting: Lipschitz upper-level objective, ??? lower-level problem. Note that here we require no convexity or smoothness assumptions on the upper-level objective, something we've not seen thus far. Of course, the guarantee will also be only for Goldstein stationarity.}
+\begin{lemma}\label{lem:LipscConstrBilevel}
+$F$ is Lipschitz
+\end{lemma}
+\begin{proof}[Lipschitzness of Bilevel \pswt{check!}]
+    By Lemma $2.1b$ of \cite{ghadimi2018approximation}, the hypergradient of $F$ computed with respect to the variable $x$ may be expressed as $\nabla_x F(x) = \nabla_x f(x, y^\ast(x)) + \nabla_x y^\ast(x) \cdot \nabla_y f(x, y^\ast(x))$. If we impose Lipschitzness assumptions on $f$, with respect to each of the coordinates, and additionally, if we can show $\|\nabla_x y^\ast(x)\|\leq L_{yx}$ for some constant, then it concludes the proof of Lipschitzness of $F$ with a Lipschitz constant $L_F \leq L_{fx} + L_{fy}\cdot L_{yx}$. Note that a bound on $\|\nabla_x y^\ast(x)\|$ was obtained by \cite{ghadimi2018approximation} in terms of second-order properties of $g$ and one in terms of constants from weaker assumptions in \cite{kwon2023fully} --- however, the latter also involves the Lagrange multiplier used therein. \pswt{How can we get for $y^\ast(x)$ a Lipschitz constant that is independent of any Lagrange multipliers? I think this is perhaps a self-contained question: what is the Lipschitz constant of the minimizer of a (strongly) convex function over the $0$-level set of a (strongly) convex function? Note: Jimmy has a solution for this.} 
+\end{proof}

@@ -33,8 +33,6 @@ class F2CSAAlgorithm2Working:
         
         # Persistent cache for warm-start
         self.prev_y = None
-        self.prev_lambda = None
-        self.prev_adam_state = None
         
     def clip_D(self, v: torch.Tensor, D: float) -> torch.Tensor:
         """
@@ -48,7 +46,7 @@ class F2CSAAlgorithm2Working:
     
     def optimize(self, x0: torch.Tensor, T: int, D: float, eta: float, 
                  delta: float, alpha: float, N_g: int = None, 
-                 warm_ll: bool = False, keep_adam_state: bool = False,
+                 warm_ll: bool = False,
                  plot_name: str = None, save_warm_name: str = None) -> Dict:
         """
         Run F2CSA Algorithm 2 optimization with WORKING hypergradient computation
@@ -99,12 +97,11 @@ class F2CSAAlgorithm2Working:
             z_t = x + s_t * Delta
             
             # Compute hypergradient using Algorithm 1 (WORKING version) with warm-start
-            if warm_ll and (self.prev_y is not None or self.prev_lambda is not None):
+            if warm_ll and self.prev_y is not None:
                 # Pass warm-start information to Algorithm 1
                 oracle_result = self.algorithm1.oracle_sample(z_t, alpha, N_g, 
                                                              prev_y=self.prev_y, 
-                                                             prev_lambda=self.prev_lambda,
-                                                             keep_adam_state=keep_adam_state)
+                                                             warm_ll=warm_ll)
             else:
                 oracle_result = self.algorithm1.oracle_sample(z_t, alpha, N_g)
             
@@ -118,7 +115,7 @@ class F2CSAAlgorithm2Working:
                     g_t = g_t * (self.reference_grad_norm / current_norm)
 
             # Compute upper-level loss at x_t to monitor Algorithm 2 gap (f(x, y*))
-            y_star, _ = self.problem.solve_lower_level(x_t)
+            y_star, _, _ = self.problem.solve_lower_level(x_t, solver='cvxpy', alpha=alpha)
             # Use fixed CRN if available
             if hasattr(self, 'crn_upper'):
                 ul_loss_t = self.problem.upper_objective(x_t, y_star, self.crn_upper).item()
@@ -157,13 +154,9 @@ class F2CSAAlgorithm2Working:
             # Cache lower-level solution for warm-start (if enabled)
             if warm_ll:
                 # Get the lower-level solution from the oracle result
-                if isinstance(oracle_result, tuple) and len(oracle_result) >= 3:
+                if isinstance(oracle_result, tuple) and len(oracle_result) >= 2:
                     self.prev_y = oracle_result[1].clone().detach()  # y_tilde
-                    self.prev_lambda = oracle_result[2].clone().detach()  # lambda_star
-                
-                # Cache Adam state if requested
-                if keep_adam_state and hasattr(self.algorithm1, 'adam_state'):
-                    self.prev_adam_state = self.algorithm1.adam_state.copy() if self.algorithm1.adam_state else None
+                    # Note: lambda_star is no longer cached as it's computed fresh each time
             
             # Print progress
             if t % max(1, T // 20) == 0 or t <= 10:
@@ -189,7 +182,7 @@ class F2CSAAlgorithm2Working:
             if start_idx < len(z_history):
                 z_group = z_history[start_idx:end_idx]
                 x_k = torch.stack(z_group).mean(dim=0)
-                y_star_k, _ = self.problem.solve_lower_level(x_k)
+                y_star_k, _, _ = self.problem.solve_lower_level(x_k, solver='cvxpy', alpha=alpha)
                 ul_loss_k = self.problem.upper_objective(x_k, y_star_k).item()
                 candidates.append((x_k, ul_loss_k))
         
@@ -208,7 +201,7 @@ class F2CSAAlgorithm2Working:
         final_g_norm = torch.norm(final_g).item()
         
         # Compute final upper-level loss f(x, y*) as Algorithm 2 gap
-        y_star, _ = self.problem.solve_lower_level(x_out)
+        y_star, _, _ = self.problem.solve_lower_level(x_out, solver='cvxpy', alpha=alpha)
         # Use fixed CRN if available
         if hasattr(self, 'crn_upper'):
             final_ul_loss = self.problem.upper_objective(x_out, y_star, self.crn_upper).item()
@@ -275,7 +268,6 @@ if __name__ == "__main__":
     parser.add_argument('--Ng', type=int, default=64, help='Number of gradient samples')
     parser.add_argument('--alpha', type=float, default=0.1, help='Alpha parameter')
     parser.add_argument('--warm-ll', action='store_true', help='Enable lower-level warm-start')
-    parser.add_argument('--keep-adam-state', action='store_true', help='Keep Adam optimizer state')
     parser.add_argument('--plot-name', type=str, default=None, help='Plot filename')
     parser.add_argument('--save-warm-name', type=str, default=None, help='Warm start save filename')
     parser.add_argument('--dim', type=int, default=5, help='Problem dimension')
@@ -310,13 +302,13 @@ if __name__ == "__main__":
     print(f"α = {alpha}")
     print(f"T = {args.T}, D = {args.D}, η = {args.eta}")
     print(f"δ = {delta:.6f}, N_g = {args.Ng}")
-    print(f"Warm-LL: {args.warm_ll}, Keep Adam: {args.keep_adam_state}")
+    print(f"Warm-LL: {args.warm_ll}")
     print()
     
     # Run Algorithm 2 optimization
     results = algorithm2.optimize(
         x0, args.T, args.D, args.eta, delta, alpha, args.Ng,
-        warm_ll=args.warm_ll, keep_adam_state=args.keep_adam_state,
+        warm_ll=args.warm_ll,
         plot_name=args.plot_name, save_warm_name=args.save_warm_name
     )
     

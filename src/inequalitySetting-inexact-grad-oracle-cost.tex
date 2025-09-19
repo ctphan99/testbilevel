@@ -1,0 +1,22 @@
+% \subsection{Algorithm of Smooth Inexact Gradient Oracle}
+% Given $x$, based on Theorem~\ref{thm:hypergradient-approximation}, we can design the following algorithm to compute an inexact gradient oracle to compute an approximate gradient to the gradient of the hyperobjective $F(x)$.
+
+\begin{restatable}[]{theorem}{computationCostInequality}\label{thm:cost_of_computing_ystar_gammastar_inequality}
+    Given any accuracy parameter $\alpha > 0$, \cref{alg:inexact-gradient-oracle} outputs $\widetilde{\nabla}_x F(x)$ such that $\|\widetilde{\nabla}_x F(x) - \nabla_x F(x)\| \leq \alpha$ within $\widetilde{O}({\alpha^{-1}})$ gradient oracle evaluations. 
+    % \pswt{perhaps change $\alpha$ to something else since we now use $\alpha$ as the penalty parameter multiplier}
+\end{restatable}
+\begin{proof}[Proof sketch (full proof in \cref{appendix:cost_of_computing_ystar_gammastar_inequality})]
+    By choosing 
+    % \pswt{change $\lambda$ to $\alpha$ and $\alpha$ to something else} \kai{Fixed it. My plan is to keep $\alpha$ as both penalty parameter and accuracy.} 
+    the penalty parameters $\alpha_1 = \alpha^{-2}$ and $\alpha_2 = \alpha^{-4}$, ~\cref{thm:diff_in_hypergrad_and_gradLagr} guarantees the inexactness of the gradient oracle is upper bounded by $O(\alpha)$.
+    For the LL problem in \cref{alg:inexact-gradient-oracle}, we use prox-method~\cite{nemirovski2004prox,golowich2020last} to find a dual solution $\lambda$ that is $\alpha$ close to the optimal dual solution using $O(1/\alpha)$ oracles.
+    For the penalty minimization, the objective $\mathcal{L}$ is strongly convex but with a poor condition number $\kappa_\mathcal{L} = O(1 / \alpha^2)$ due to strong convexity $O(\alpha_1 \mu_g) = O( {\alpha^{-2} \mu_g})$ and smoothness $O(\alpha_2 C_h) = O(\alpha^{-4})$. This leads to $O(\sqrt{\kappa_\mathcal{L}} \log \| \alpha^{-1} \|) = \widetilde{O}({\alpha^{-1}})$ iterations to converge to $\alpha$ accuracy using standard accelerated methods.
+    
+    Using these error bounds, we can bound the error propagation of the inexact dual solution $\lambda$, inexact primal solution $y^*_{\lambda,\alpha}$, and inexact gradient oracle using \cref{thm:diff_in_hypergrad_and_gradLagr} by total error $O(\alpha)$.
+    Therefore, putting all together, we only need $O(1/\alpha)$ oracle calls and can maintain $O(\alpha)$ inexactness.
+\end{proof}
+
+% \subsection{Convergence rate analysis}
+% \begin{theorem}
+%     Given \cref{thm:cost_of_computing_ystar_gammastar_inequality}, \cref{thm:cost_of_y_lambda_star_inequality}, and \cref{thm:Lipschitz-min-with-inexact-grad-oracle}, we can show that the algorithm converges...
+% \end{theorem}

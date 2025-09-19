@@ -1,0 +1,47 @@
+% \subsection{Differentiable optimization and non-fully first-order baseline}
+% More precisely, ~\cite{amos2017optnet} propose treating KKT conditions of the constrained optimization problem as a fixed point equation of the optimal primal $y^*$ and dual $\gamma$ solution, and applying implicit function theorem to compute the derivative $\frac{\partial y^*}{\partial x}$ and $\frac{\partial \gamma}{\partial x}$. However, differentiating through the KKT conditions involves second-order derivatives. 
+
+% \pswt{do we use this stuff below? it does not seem like it's used later, so we can perhaps remove it.} \kai{I think we should keep all the KKT conditions related derivation here. Later we just refer back to Section 2 for that. Some of these can be simplified to save space though.}
+% \begin{align}
+%     & \nabla_y g(x,y^*) + \gamma^\top \nabla_y h(x,y^*) = 0 \label{eqn:first-order-gradient} & \text{and} \quad \gamma h(x,y^*) = 0 
+% \end{align}
+% By computing the derivative of Equation~\ref{eqn:first-order-gradient} and applying implicit function theorem, we get a linear system of $\frac{d y^*}{d x}$ and $\frac{d \gamma}{d x}$ that can be written in a matrix form:
+% \begin{align}\label{eqn:kkt-system}
+% \underbrace{
+% \begin{bmatrix}
+% \nabla^2_{yy} g + \gamma^\top \nabla_{yy}^2 h & \nabla_y h_S^\top \\
+% \text{diag}(\gamma) \nabla_y h_S & 0
+% \end{bmatrix}}_{H_{\text{ineq}}}
+% \begin{bmatrix}
+%     \frac{\partial y^*}{\partial x} \\
+%     \frac{\partial \gamma_S}{\partial x}
+% \end{bmatrix}
+% = 
+% -
+% \begin{bmatrix}
+%     \nabla^2_{xy} g + \gamma \nabla_{xy}^2 h \\
+%     \text{diag}(\gamma_S) \nabla_x h_S
+% \end{bmatrix}
+% \end{align}
+% where $S$ denotes the set of active constraints $S = \{ i: h_i(x,y^*) = 0 \}$. We notice that the inactive constraints ($i \in \bar{S} = \{ h_i(x,y^*) < 0 \}$) must have zero dual solution $\gamma_i$ and zero dual derivative $\frac{d \gamma_i}{d x}$ (see Appendix~\ref{sec:inactive-constraints-in-differentiable-optimization} for more details), which can be removed in the matrix form.
+
+% For equality constraints, we get a similar expression where all the constraints are active:
+% \begin{align}\label{eqn:linear-kkt-system}
+% \underbrace{
+% \begin{bmatrix}
+% \nabla^2_{yy} g + \gamma^\top \nabla_{yy}^2 h & \nabla_y h^\top \\
+% \nabla_y h & 0
+% \end{bmatrix}}_{H_{\text{eq}}}
+% \begin{bmatrix}
+%     \frac{\partial y^*}{\partial x} \\
+%     \frac{\partial \gamma}{\partial x}
+% \end{bmatrix}
+% = 
+% -
+% \begin{bmatrix}
+%     \nabla^2_{xy} g + \gamma \nabla_{xy}^2 h \\
+%     \nabla_x h
+% \end{bmatrix}
+% \end{align}
+
+% \cref{eqn:kkt-system} and \cref{eqn:linear-kkt-system} give a valid expression to compute subgradient $\frac{\partial y^*}{\partial x}$ under different constraints, which can be used in \cref{eqn:inequality_reformulation}.

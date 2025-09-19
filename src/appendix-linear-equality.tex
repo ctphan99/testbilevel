@@ -1,0 +1,483 @@
+\section{Proofs from \cref{sec:equality-bilevel}} \label{sec:appendix_linear_equality}
+In this section, we provide the full proofs of 
+claims for bilevel programs with linear equality constraints, as stated in \cref{sec:equality-bilevel}. We first state a few technical results using the implicit function theorem that we repeatedly invoke in our results for this setting. 
+
+\begin{restatable}{lemma}{lemDystarDxLineq}\label{lem:dystarDxLinEq}
+    Fix a point $x$. Given $y^*= \arg\min_{y: h(x,y)=0} g(x,y)$ where $g$ is strongly convex in $y$ and $\lamstar$ is the dual optimal variable for this problem, define $\Leqc(x,y,\lam)=g(x,y)+\langle\lam, h(x,y)\rangle$. Then, we have 
+\[\underbrace{\begin{bmatrix}\grad^2_{yy}\Leqc(x,\ystar,\lamstar) & \nabla_y h(x,y^{*})^{\top}\\
+\nabla_y h(x,y^{*}) & 0
+\end{bmatrix}}_{H ~\text{for linear equality constraints}}\begin{bmatrix}\frac{d\ystar}{dx}\\
+\frac{d\lamstar}{dx}
+\end{bmatrix}=\begin{bmatrix}-\nabla^2_{yx}g(x,y^{*})-\nabla^2_{yx}\langle\lamstar, h(x,y^{*})\rangle\\
+-\nabla_x h(x,\ystar)\end{bmatrix}.
+% \numberthis\label{eq:def_matrix_H}
+\]
+\end{restatable}
+% \lemDystarDxLineq*
+\begin{proof} 
+Since $g$ is strongly convex, by linear
+constraint qualification, the KKT condition
+is both sufficient and necessary condition for optimality.
+Hence, consider the
+following KKT system obtained via first order optimality of $y^*$, with dual optimal variable $\lamstar$:
+\begin{align*}
+    \nabla_y g(x,y^{*})+\nabla_y\langle\lamstar,  h(x,y^{*})\rangle  =0, \text{ and } h(x, \ystar)=0.\numberthis\label{eqs:kkt-lin-eq}
+\end{align*}
+Differentiating 
+the system of equations in \cref{eqs:kkt-lin-eq} with respect to $x$ and rearranging terms in a matrix-vector format yields:
+\begin{equation}\label{eqs:differentiated-kkt-lin-eq}
+    \begin{aligned}
+\begin{bmatrix}\nabla^2_{yy} g(x,\ystar) + \nabla^2_{yy}\langle\lamstar,   h(x,\ystar)\rangle  & \nabla_y h(x,y^{*})^{\top}\\
+\nabla_y h(x,y^{*}) & 0
+\end{bmatrix}\begin{bmatrix}\frac{d\ystar}{dx}\\
+\frac{d\lamstar}{dx}
+\end{bmatrix}=\begin{bmatrix}-\nabla^2_{yx}g(x,y^{*})-\nabla^2_{yx}\langle\lamstar, h(x,y^{*})\rangle\\
+-\nabla_x h(x,\ystar)\end{bmatrix}
+    \end{aligned}
+\end{equation}
+% \begin{equation}
+% \begin{aligned}
+% \nabla^2_{yy} g(x,\ystar)\frac{d\ystar}{dx}+\nabla^2_{yx} g(x,\ystar)+\lamstar \nabla^2_{yy} h(x,\ystar)\frac{d\ystar}{dx}+\lamstar \nabla^2_{yx} h(x,\ystar)+\nabla_y h(x,\ystar)\frac{d\lamstar}{dx} & =0\\
+% \nabla_y h(x,\ystar)\frac{d\ystar}{dx}+\nabla_x h(x,\ystar) & =0.
+% \end{aligned}
+% \end{equation}
+Noting that $\nabla_{yy}^{2}\Leqc(x,y,\lam)=\nabla^2_{yy} g(x,y)+\nabla^2_{yy}\langle\lam,  h(x,y)\rangle$, we can write \cref{eqs:differentiated-kkt-lin-eq} in the form shown in the lemma.
+\end{proof}
+
+
+\begin{restatable}{lemma}{lemLineqHinvertibility}\label{lem:non-singular-req} 
+Consider the setup in \cref{{lem:dystarDxLinEq}}. The matrix $H$ defined in \cref{eq:def_matrix_H}  is invertible if
+the Hessian $\grad_{yy}^{2}\Leqc(x,\ystar,\lamstar):=\nabla^2_{yy} g(x, y^*) +\nabla^2_{yy}\langle\lamstar,  h(x, y^*)\rangle$
+satisfies $\nabla_{yy}^{2}\Leqc(x,\ystar,\lamstar)\succ0$ over
+the tangent plane $T:=\{y:\nabla_y h(x,y^{*})y=0\}$ and $\nabla_y h$ has full
+rank.
+% , i.e., $\ystar$ is a non-degenerate local optimal solution. 
+% As such, \pswt{move this}
+% \label{lem:non-singular-req}
+\end{restatable}
+\begin{proof}
+Let $u=[y,\lam].$ We show that $Hu=0$ implies $u=0$, which in turn implies invertibility of $H$. If $\nabla_y h(x,\ystar)y\neq0,$ then by construction of $u$ and $H$, we must also have $Hu\neq0$. Otherwise if $\nabla_y h(x,\ystar)y=0$ and $y\neq0$,
+the quadratic form $u^{\top}Hu$ is positive, as seen by 
+\[
+u^{\top}Hu=y^{\top}\grad^2_{yy}\Leqc(x,\ystar,\lamstar)y>0,
+\] where the final step is by the assumption of $\Leqc$ being positive definite over the defined tangent plane $T=\{y:\nabla_y h(x,y^{*})y=0\}$. 
+If $y=0$ while $Hu=0$, then $\nabla_y h$ having full rank implies $\lam=0$. Combined with $y=0$, this means $u=0$, as required when $Hu=0$. This concludes the proof. 
+\end{proof}
+
+\begin{restatable}{corollary}{corNonSingularH}\label{cor:nonsingularH}
+For \cref{prob:lin-eq} under \cref{assumption:linEq_smoothness} and \cref{assumption:eq},
+% \pswt{and TBD assumption}, 
+ the matrix $H$  (as defined in \cref{eq:def_matrix_H}) is non-singular. Further, there exists a finite $C_H$ such that $\|H^{-1}\|\leq C_H$. 
+% and $\|\frac{d\ystar}{dx}\|\leq C_H C_g$. 
+\end{restatable}
+\begin{proof} Since we are assuming strong convexity of $g$, \cref{{lem:non-singular-req}} applies, yielding the claimed invertibility of $H$. Combined with the boundedness of variables $x$ (per \cref{assumption:eq}) 
+% \pswt{Put the equality-specific bound here for compactness 
+% of $\mathcal{X}$ 
+and continuity of the inverse implies a bound on $\|H^{-1}\|$. 
+\end{proof}
+
+
+\subsection{Construction of the inexact gradient oracle}
+We now show how to construct the inexact gradient oracle for the objective $F$ in \cref{prob:lin-eq}. As sketched in \cref{sec:equality-bilevel}, we then use this oracle in a projected gradient descent algorithm to get the claimed guarantee. 
+% \jz{to delete, we don't need 'em}
+% {\color{lightgray} 
+\begin{restatable}{lemma}{lemLEydelstarCloseToystar}
+\label{lem:y-delstar-Lip} Consider  \cref{prob:lin-eq} under \cref{assumption:linEq_smoothness} and \cref{assumption:eq}.
+% \pswt{and TBD assumption}. 
+Let  $\ystardel$ be as defined in \cref{eq:lower_perturb}. 
+% Suppose the constraint set $Y(x):=\{y:h(x,y)=0\}$
+% is convex in $x$.
+% and the functions $g$ and $f$ satisfy, respectively, $\mu_{g}$-strong convexity and 
+% $L_{f}$-Lipschitzness with respect to $y$, as per \cref{assumption:smoothness}. 
+Then, for any $\delta\in[0,\Delta]$ with $\Delta\leq\mu_{g}/2C_{f}$, the following
+relation is valid: \[
+\|y_{\delta}^{*}-y^{*}\|\leq M(x)\delta,   \textrm{ with } M(x):=\frac{2}{\mu_{g}}\|\grad_{y} f(x,\ystar)\|\leq \frac{2L_f}{\mu_g}.
+\]
+\end{restatable}
+\begin{proof}
+    The first-order optimality condition applied to $g(x,y)+\delta f(x,y)$ at $\ystar$ and $\ydelstar$ gives 
+\[ \innerprod{\grad_y g(x,\ydelstar)+\delta\grad_y f(x,\ydelstar)}{y^{*}-y_{\del}^{*}} \geq0,\] which upon adding and subtracting $\grad_y f(x,y^{*})$ transforms into
+\[ \innerprod{\grad_y g(x,\ydelstar)+\delta[\grad_y f(x,\ydelstar)-\grad_y f(x,y^{*})]+\delta\grad_y f(x,y^{*})}{y^{*}-y_{\del}^{*}}\geq0.\numberthis\label[ineq]{eq:add-sub-fo-gpf}\] Similarly, the first-order optimality condition applied to $g$ at $\ystar$ and $y_{\delta}^{*}$ gives 
+\[\innerprod{\grad_y g(x,y^{*})}{y_{\delta}^{*}-\ystar} \geq0.\numberthis\label[ineq]{eq:fo-g}\]
+Adding \cref{eq:add-sub-fo-gpf} and \cref{eq:fo-g} and rearranging yields 
+\begin{align*}
+\innerprod{\grad_y g(x,y_{\delta}^{*})-\grad_y g(x,y^{*})+\delta[\grad_y f(x,\ydelstar)-\grad_y f(x,y^{*})]}{y_{\delta}^{*}-\ystar} & \leq\innerprod{\delta\grad_y f(x,\ystar)}{y^{*}-\ydelstar}.
+\end{align*} Applying to the left side above a lower bound via strong convexity of $g+\delta f$ and to the right hand side an upper bound via Cauchy-Schwarz inequality, we have
+\[s\|\ydelstar-\ystar\|\leq \delta \|\nabla_y f(x, y^*)\|, \numberthis\label[ineq]{eq:combined-fo-g-gpf}\] where $s$ is the strong convexity of $g+\delta f$. Since $f$ is $C_f$-smooth, the worst case
+value of this is $s=\mu_{g}-\delta C_{f}=\mu_{g}-\frac{\mu_{g}}{2C_{f}}C_{f}=\mu_{g}/2$, which when plugged in \cref{eq:combined-fo-g-gpf} then gives the claimed bound. 
+\end{proof}
+
+
+
+
+\begin{restatable}{lemma}{lemLinEqLimitFiniteDiffEqualsGradF}\label{lem:lineq-in-limit-finitediff-equals-gradf}
+Consider  \cref{prob:lin-eq} under \cref{assumption:linEq_smoothness} and \cref{assumption:eq}.
+% \pswt{and TBD assumption}.
+Then the
+following relation is valid.
+% \pswt{transposes in proof}
+\[
+\lim_{\delta\rightarrow0}\frac{\nabla_{x}[g(x,\ystardel(x))+\lamdeltar h(x,\ystar)]-\nabla_{x}[g(x,y^{*}(x))+\lamstar h(x,y^{*})]}{\delta}=\left(\frac{d y^{*}(x)}{d x}\right)^\top\nabla_{y}f(x,y^{*}(x)).
+\]
+\end{restatable}
+\begin{proof}
+Recall that by definition, $g$ is strongly convex and $y^* = \arg\min_{y: h(x,y)=0} g(x,y)$. Hence, we can apply \cref{lem:dystarDxLinEq}. Combining this with \cref{lem:non-singular-req} and further applying that linearity of $h$ implies $\nabla^2_{yy}h = 0$ and $\nabla^2_{xy}h=0$, we obtain the following: 
+% Since the lower-level problem is strongly convex,  The KKT system of equations given by the first-order optimality at  $y^{*}$ is 
+% \begin{align*}
+% g_{y}(x,y^{*})+\lamstar h_{y}(x,y^{*}) & =0\\
+% h(x,\ystar) & =0.
+% \end{align*}
+% Taking derivatives with respect to $x$ on both sides throughout gives us the following linear system associated with the KKT condition 
+% to obtain 
+% (where we used  $h_{yy}=0$ and $h_{xy}=0$ by linearity of $h$):
+% \[
+% \underbrace{\begin{bmatrix}g_{yy}(x,y^{*}) & h_{y}(x,y^{*})^{\top}\\
+% h_{y}(x,y^{*}) & 0
+% \end{bmatrix}}_{H_x(x,y^{*})}\begin{bmatrix}\frac{d\ystar}{dx}\\
+% \frac{d\lamstar}{dx}
+% \end{bmatrix}=\begin{bmatrix}-g_{yx}(x,y^{*})\\
+% -h_{x}(x,\ystar)
+% \end{bmatrix}. \numberthis\label{eq:linEq-Hxxystar-dydx}
+% \]
+% Rearranging the terms above and using the existence  of  $[H_x(x,y^{*})]^{-1}$  from  
+\[ \begin{bmatrix}\frac{d\ystar}{dx}\\
+\frac{d\lamstar}{dx}
+\end{bmatrix}=\begin{bmatrix}\nabla^2_{yy} g(x,y^{*}) & \nabla_y h(x,y^{*})^{\top}\\
+\nabla_y h(x,y^{*}) & 0
+\end{bmatrix}^{-1}\begin{bmatrix}-\nabla^2_{yx}g(x,y^{*})\\
+-\nabla_x h(x,\ystar)
+\end{bmatrix}.\]
+% \pswt{this proof until here repeats \cref{sec:warmup-lin-eq}; keep only one} 
+So we can express the right-hand side of the claimed equation in the lemma statement by 
+\begin{align*}
+\left(\frac{d y^{*}(x)}{d x}\right)^\top\nabla_{y}f(x,y^{*}(x))&=\begin{bmatrix} \left(\frac{dy^*}{dx}\right)^\top & \left(\frac{d\lamstar}{dx}\right)^\top\end{bmatrix}\begin{bmatrix}\nabla_{y}f(x,y^{*}(x))\\ 
+0\end{bmatrix},
+\end{align*} which can be further simplified to \[\begin{bmatrix}-\nabla^2_{yx} g(x,y^{*})^\top & -\nabla_x h(x,\ystar)^\top\end{bmatrix}\begin{bmatrix}\nabla^2_{yy} g(x,y^{*}) & \nabla_y h(x,y^{*})^{\top}\\
+\nabla_y h(x,y^{*}) & 0
+\end{bmatrix}^{-1}\begin{bmatrix}\nabla_{y}f(x,y^{*}(x))\\ 
+0\end{bmatrix}.\numberthis\label{prop3eq:RHS}\]
+We now apply \cref{lem:dystarDxLinEq} to the perturbed problem defined in \cref{eq:lower_perturb}.
+We know from \cref{lem:y-delstar-Lip} that $\lim_{\delta\rightarrow0}\ydelstar=\ystar$. 
+The associated KKT system is given by
+% \begin{equation}
+\begin{align*}
+\delta \nabla_y f (x,\ydelstar)+\nabla_y g(x,\ydelstar)+\nabla_y \langle\lamdeltar,  h(x,\ydelstar)\rangle  =0 \text{ and }
+h(x,\ydelstar) =0. \numberthis\label{eqs:lineq-kkt-perturbed}
+\end{align*}
+% \end{equation}
+Taking the derivative with respect of \cref{eqs:lineq-kkt-perturbed} gives the following  implicit  system, where we used the fact that $h$ is linear and hence $\nabla^2_{yy} h=0$:  
+\begin{equation}
+\underbrace{\begin{bmatrix}\delta \nabla^2_{yy} f(x,\ydelstar)+\nabla^2_{yy} g(x,\ydelstar) & \nabla_y h(x,\ydelstar)^{\top}\\
+\nabla_y h(x,\ydelstar) & 0
+\end{bmatrix}}_{H_{\delta}}\begin{bmatrix}\frac{d\ydelstar}{d\delta}\\
+\frac{d\lamdeltar}{d\delta}
+\end{bmatrix}=\begin{bmatrix}-\nabla_y f(x,\ydelstar)^\top\\
+0
+\end{bmatrix}.\label{eq:implicit_function}
+\end{equation}
+For a sufficiently small  $\delta$, we have $\nabla^2_{yy} g(x,\ystardel)+\delta  \nabla^2_{yy} f(x,\ydelstar)\succeq \tfrac{\mu_{g}}{2}I$, which implies  invertibility of $H_{\delta}$ by an application of \cref{{lem:non-singular-req}}. 
+% $H_{\delta}\succeq\begin{bmatrix}\half\mu_{yy}I & A^{\top}\\
+% A & 0
+% \end{bmatrix}$, i.e., $H_{\delta}$ is positive definite. 
+Since \cref{lem:y-delstar-Lip} implies  $\lim_{\delta\rightarrow0}\ydelstar=\ystar$, we get 
+\[
+\begin{bmatrix}\frac{d\ydelstar}{d\delta}\\
+\frac{d\lamdeltar}{d\delta}
+\end{bmatrix}|_{\delta=0}=\begin{bmatrix}\nabla^2_{yy} g(x,\ystar) & \nabla_y h(x,\ystar)^{\top}\\
+\nabla_y h(x,\ystar) & 0
+\end{bmatrix}^{-1}\begin{bmatrix}-\nabla_y f(x,\ystar)\\
+0
+\end{bmatrix}.
+\]
+So we can express the left-hand side of the expression in the lemma statement by 
+\begin{align*}
+&\lim_{\delta\rightarrow0}\frac{\nabla_{x}[g(x,\ystardel(x))+\langle\lamdeltar, h(x,y^*)\rangle]-\nabla_{x}[g(x,y^{*}(x))+\langle\lamstar, h(x,y^{*})\rangle]}{\delta}\\
+&= \nabla^2_{xy} g(x,y^*) \frac{d\ydelstar}{d\delta} + \nabla_x h(x,y^*)^\top \frac{d\lamdeltar}{d\delta}\\ 
+&=\begin{bmatrix}\nabla^2_{xy} g(x,\ystar) & \nabla_x h(x,\ystar)^\top\end{bmatrix}\begin{bmatrix}\nabla^2_{yy} g(x,\ystar) & \nabla_y h(x,\ystar)^{\top}\\
+\nabla_y h(x,\ystar) & 0
+\end{bmatrix}^{-1}\begin{bmatrix}-\nabla_y f(x,\ystar)\\
+0
+\end{bmatrix},
+\end{align*}
+which matches \cref{prop3eq:RHS} (since $(\nabla^2_{yx} g)^\top=\nabla^2_{xy}g$), thus concluding the proof.
+\end{proof}
+
+% }
+
+\lemYdelstarLamdelstarSmooth*
+\begin{proof} 
+Rearranging \cref{{{eq:def_matrix_H}}} and applying \cref{cor:nonsingularH}, we have \[
+\begin{bmatrix}\frac{d\ystar}{dx}\\
+\frac{d\lamstar}{dx}
+\end{bmatrix}=\begin{bmatrix}\nabla^2_{yy} g(x,y^{*}) & B^{\top}\\
+B & 0
+\end{bmatrix}^{-1}\begin{bmatrix}-\nabla^2_{yx} g(x,y^{*})\\
+-\nabla_x h(x,\ystar)
+\end{bmatrix}. 
+\] This implies a Lipschitz bound of $C_H \cdot (\gssmooth + \|A\|)$. 
+    Next, note that in the case with linear equality constraints, the terms in  \cref{{{eqs:differentiated-kkt-lin-eq}}}  involving second-order derivatives of $h$ are all zero; differentiating \cref{{{eqs:differentiated-kkt-lin-eq}}}    with respect to $x$, we notice that the linear system we get again has the same matrix $H$ from before. We can therefore again perform the same inversion and apply the bound on $\|H^{-1}\|$ and on the third-order derivatives of $g$ (\cref{assumption:eq})
+    %\pswt{NOTE we are hiding away all the third order ugliness here}
+%     we get 
+%     \begin{align*}
+%         g_{xyy} \frac{dy^*}{dx} + \frac{dy^*}{dx}^\top g_{yyy} \frac{dy^*}{dx} + \nabla^2_{yy} g \frac{d^2y^*}{dx^2} + h_y \frac{d^2\lamstar}{dx^2} &= -g_{xyx} - g_{yyx} \frac{dy^*}{dx} \\
+%         h_y \frac{d^2y^*}{dx^2} &= 0.
+%     \end{align*} Rearranging the above system of equations gives, for $H$ as in \cref{eq:def_matrix_H}, 
+%     \[
+% \begin{bmatrix}\frac{d^2\ystar}{dx^2}\\
+% \frac{d^2\lamstar}{dx^2}
+% \end{bmatrix}=H_{}^{-1}\begin{bmatrix}-g_{xyx}(x,y^{*}) - g_{yyx}\frac{dy^*}{dx} - g_{xyy}\frac{dy^*}{dx} -  \frac{dy^*}{dx}^\top g_{yyy} \frac{dy^*}{dx} \\ 
+% 0 
+% \end{bmatrix}.
+% \] By applying TBD 
+% \pswt{put the equality-specific assumption} 
+% /that bounds the third-order derivatives of $g$, 
+to observe that $\|\frac{d^2y^*}{dx^2}\|\leq O(C_H \cdot \gtsmooth \|\frac{dy^*}{dx}\|^2)= O(C_H^3\cdot\gtsmooth\cdot(\gssmooth+\|A\|)^2)$, where we are hiding numerical constants in the Big-Oh notation. 
+
+As a result, we can calculate the Lipschitz smoothness constant associated with the hyper-objective $F$ by
+\begin{align*}
+&\|\nabla F(x) - \nabla F(\bar x)\| \\
+&\leq \|\frac{dy^*(x)}{dx}\nabla_y f(x,y^*(x))-\frac{dy^*(\bar x)}{dx}\nabla_y f(\bar x,y^*(\bar x))\|+ \|\nabla_x f(x,y^*(x)) - \nabla_x f(\bar x, y^*(\bar x))\|\\
+&\leq  [C_fC_H (L_g + \|A\|) + C_f C^2_H (L_g + \|A\|)^2+ L_f C_H^3 S_g (L_g+\|A\|)^2]\|x-\bar x\| \\
+&\ \ +[C_f + C_f C_H (L_g +\|A\|)] \|x-\bar x\|\\
+&\leq \underbrace{ 2(L_f +C_f+C_g)C_H^3 S_g (L_g +\|A\|)^2}_{C_F}\|x-\bar x\|.
+\end{align*}
+
+\end{proof}
+
+
+%\jz{To be fixed, what's the exact constant dependence? We need it to set the oracle accuracy.}
+\lemLineqFiniteDiffEqualsGradF*
+\begin{proof}
+For simplicity, we adopt the following notation throughout this proof:
+$g_{xy}(x,y) = \grad^2_{xy} g,$ and $g_{xyy}$ denotes the tensor such that its $ijk$ entry is given by $\frac{\partial^3 g}{\partial x_i \partial y_j \partial y_k}$. 
+We first consider the terms involving $g$. 
+By the fundamental theorem of calculus, we have  \[ \nabla_{x}g(x,\ystardel(x))-\nabla_{x}g(x,y^{*}(x)) =\int_{t=0}^{\delta}g_{xy}(x,y_{t}^{*}(x))\frac{dy_{t}^{*}(x)}{dt} dt. \] As a result, we have 
+\begin{align*}
+&\frac{\nabla_{x}g(x,\ystardel(x))-\nabla_{x}g(x,y^{*}(x))}{\delta}-g_{xy}(x,y^{*}(x))\frac{dy_{t}^{*}(x)}{dt}|_{t=0}\\
+& =\frac{1}{\delta}\int_{t=0}^{\delta}\left(g_{xy}(x,y_{t}^{*}(x))\frac{dy_{t}^{*}(x)}{dt}-g_{xy}(x,y^{*}(x))\frac{dy_{t}^{*}(x)}{dt}|_{t=0} \right)dt\\
+ & =\frac{1}{\delta}\int_{t=0}^{\delta}\left(g_{xy}(x,y_{t}^{*}(x))\frac{dy_{t}^{*}(x)}{dt}-g_{xy}(x,y^{*}(x))\frac{dy_t^{*}(x)}{dt}|_{t=0}\right) dt\\
+ & =\frac{1}{\delta}\int_{t=0}^{\delta}\left(g_{xy}(x,y_{t}^{*}(x))-g_{xy}(x,y^{*}(x))\right) \frac{dy_{t}^{*}(x)}{dt} dt +\frac{1}{\delta}\int_{t=0}^{\delta}g_{xy}(x,y^{*}(x))\cdot\left(\frac{dy_{t}^{*}(x)}{dt}-\frac{dy_t^{*}(x)} {dt}|_{t=0}\right)dt.\numberthis\label{eq:LE-findiff-to-ftimespartial} \end{align*} We now bound each of the terms on the right-hand side of \cref{eq:LE-findiff-to-ftimespartial}. 
+ For the first term, we have  
+ \begin{align*}
+&\|\frac{1}{\delta}\int_{t=0}^{\delta}\left(g_{xy}(x,y_{t}^{*}(x))-g_{xy}(x,y^{*}(x))dt\right) \frac{dy_{t}^{*}(x)}{dt}\|\\
+&\leq\frac{1}{\delta}\int_{t=0}^{\delta}\|\frac{dy_{t}^{*}(x)}{dt}\|\cdot\int_{s=0}^{t}\|g_{xyy}(x,y_{s}^{*}(x))\|\|\frac{dy_{s}^{*}(x)}{ds}\|ds\cdot dt\\
+&\leq\frac{1}{\delta}\int_{t=0}^{\delta}\|\frac{dy_{t}^{*}(x)}{dt}\|\cdot\max_{s\in[0,\delta]}\|g_{xyy}(x,y_{s}^{*}(x))\|\cdot\|\frac{dy_{s}^{*}(x)}{ds}\|tdt\\
+&\leq\frac{1}{\delta}\cdot\max_{u\in[0,\delta]}\|g_{xyy}(x,y_{u}^{*}(x))\|\cdot\delta^{2}\cdot\max_{t\in[0,\delta]}\|\frac{dy_{t}^{*}(x)}{dt}\|^{2}\\&\leq\del\cdot\max_{u\in[0,\delta]}\|g_{xyy}(x,y_{u}^{*}(x))\|\cdot\max_{t\in[0,\delta]}\|\frac{dy_{t}^{*}(x)}{dt}\|^{2}
+ \\
+ &= \del\cdot\gtsmooth\cdot \ystarliplineq^2,\numberthis\label[ineq]{eq:finite-diff-grad-first_term}
+ \end{align*} where $\ystarliplineq$ is the Lipschitz bound on $y^*$ as shown in \cref{lem:smoothness_of_ydelstar_lamdelstar}, and $\gtsmooth$ is the smoothness of $g$ from
+ \cref{assumption:eq}.
+ % \pswt{cref the third order assumption}. 
+ For the second term on the right-hand side of \cref{eq:LE-findiff-to-ftimespartial}, we have  
+ \begin{align*}
+\|\frac{1}{\delta}\int_{t=0}^{\delta}g_{xy}(x,y^{*}(x))\cdot\left(\frac{dy_{t}^{*}(x)}{dt}-\frac{dy^{*}(x)}{dt}\right)\| & \leq\frac{1}{\delta}\cdot\|g_{xy}(x,y^{*}(x))\|\cdot\int_{t=0}^{\del}\left(\int_{s=0}^{t}\|\frac{d^{2}}{ds^{2}}y_{s}^{*}(x)\|ds\right)dt \\
+ & \leq\frac{1}{\del}\cdot\|g_{xy}(x,y^{*}(x))\|\cdot\max_{s\in[0,\delta]}\|\frac{d^{2}}{ds^{2}}y_{s}^{*}(x)\|\cdot\delta^{2} \\
+ & \leq\delta\cdot\|g_{xy}(x,y^{*}(x))\|\cdot\max_{s\in[0,\delta]}\|\frac{d^{2}}{ds^{2}}y_{s}^{*}(x)\|\\
+ &= \delta\cdot \gssmooth\cdot \ystarsmoothlineq, \numberthis\label[ineq]{eq:finite-diff-grad-second_term} 
+\end{align*} where $\gssmooth$ is the bound on smoothness of $g$ as in
+\cref{assumption:eq},
+% \pswt{cref the smoothness assumption}, 
+and $\ystarsmoothlineq$ is the bound on $\|\frac{d^2y^*}{dx^2}\|$ from \cref{lem:smoothness_of_ydelstar_lamdelstar}. 
+For the terms involving the function $h$, we have \begin{align*}
+\|\frac{\lamdeltar-\lam^{*}}{\delta}-\frac{d\lam_{\delta}^{*}}{d\del}|_{\delta=0}\| & =\frac{1}{\delta}\int_{t=0}^{\del}\|\frac{d\lam_{t}^{*}}{dt}-\frac{d\lam_{\delta}^{*}}{d\del}|_{\delta=0}\|dt\\
+ & =\frac{1}{\delta}\int_{t=0}^{\delta}\int_{s=0}^{t}\|\frac{d^{2}}{ds^{2}}\lam_{s}^{*} \| ds\cdot dt\\
+ & \leq\frac{1}{\delta}\max_{s\in[0,\delta]}\|\frac{d^{2}}{ds^{2}}\lam_{s}^{*}\|\cdot\delta^{2}\leq\delta\cdot\max_{s\in[0,\delta]}\|\frac{d^{2}}{ds^{2}}\lam_{s}^{*}\|\\
+ &= \delta\cdot \lamstarsmoothlineq,\numberthis\label[ineq]{eq:finite-diff-grad-third-term}
+\end{align*} where $\lamstarsmoothlineq$ is the bound on $\|\frac{d^2 \lam^*}{ds^2}\|$ from \cref{lem:smoothness_of_ydelstar_lamdelstar}. 
+Combining  \cref{eq:LE-findiff-to-ftimespartial}, \cref{eq:finite-diff-grad-first_term}, \cref{eq:finite-diff-grad-second_term}, and \cref{eq:finite-diff-grad-third-term}, along with \cref{{lem:lineq-in-limit-finitediff-equals-gradf}}, \cref{cor:nonsingularH}, and  \cref{{lem:smoothness_of_ydelstar_lamdelstar}}, we have that overall bound is \begin{align*}\delta\cdot( \gtsmooth \ystarliplineq^2 + \gssmooth \ystarsmoothlineq + \lamstarsmoothlineq) &\leq O(\delta\cdot(\gtsmooth \cdot C_H^3 \cdot (\gssmooth + \|A\|)^2\cdot(\gssmooth+C_f + L_f))).\end{align*} 
+% which concludes the proof.
+% \pswt{Explicit scaling factors of $\delta$}
+\end{proof}
+
+% \jz{Another small lemma to show $\hat{\mathcal{G}}_{y^*}(x;\delta):=\frac{\hat{y}^*[x+\delta \nabla_y f(x,\hat{y}^*(x))]-\hat{y}^*(x)}{\delta}$ approximates $\mathcal{G}_{y^*}(x;\delta):=\frac{y^*[x+\delta \nabla_y f(x,y^*(x))]-y^*(x)}{\delta}$, that also decides the accuracy we have to get for the approximate $\hat{y}^*$.}
+\subsection{Cost of linear equality constrained bilevel program}\label{sec:LEQ-main-thm-full-proof}
+
+% Smoothness Constant
+\begin{algorithm}[h]\caption{The Fully First-Order Method for Bilevel Equality Constrained Problem}\label{alg:LE-full-alg}
+\begin{algorithmic}[1]
+% \State \jz{state the accuracy we need to solve for the sub-problems}
+\State \textbf{Input:}
+Current $x_0$, accuracy $\epsilon$, perturbation $\delta = \epsilon^2/8C^2_F R_\mathcal{X}$ with $C_F= 2(L_f +C_f+C_g)C_H^3 S_g (L_g +\|A\|)^2$,  accuracy for the lower level problem $\tilde\delta = 2(C_g +\|A\|)\delta^2$.
+\For{t=0,1,2,...}
+
+\State Run \cref{alg:LE-approximate-prima-dual-solution}   to generate $\tilde \delta$-accurate primal and dual solutions $(\hat{y}^*, \hat{\lambda}^*)$ for $$\min_{y: Ax_t+By=b} g(x_t,y)$$
+\State  Run \cref{alg:LE-approximate-prima-dual-solution} to generate $\tilde \delta$-accurate primal and dual solutions $(\hat{y}_\delta^*, \hat{\lambda}_\delta^*)$ for 
+$$\min_{y: Ax_t+By=b} g(x_t,y)+\delta f(x_t, y)$$ 
+
+\State Compute $\hat{v}_t:= \frac{\nabla_{x}[g(x_t,\hat{y}_\delta^*)+\hat{\lambda}_\delta^* h(x,\hat{y}^*)]-\nabla_{x}[g(x_t,\hat{y}^*)+\hat{\lambda}^* h(x,\hat{y}^*)]}{\delta}$, set $$\widetilde{\nabla} F(x_t) := \hat{v}^t + \nabla_x f(x, \hat{y}^*(x)).$$
+% \pswt{cref a standalone expression}
+\State Set $x_{t+1} \leftarrow \arg\min_{z\in \mathcal{X}} \| z- (x_{t}-\frac{1}{C_F}\widetilde{\nabla} F(x_{t}))\|^2.$
+\EndFor
+
+\end{algorithmic}
+\end{algorithm}
+
+
+\linEqFullCost*
+\begin{proof}
+
+We first show the inexact gradient $\widetilde{\nabla}F(x_t)$ generated in \cref{alg:LE-full-alg} is an $\delta$-accurate approximation to the hyper-gradient $\nabla F(x_t).$ Consider the inexact gradient defined in \eqref{eq:part-hypergrad-approx-lin-eq}
+\begin{align*}
+    \|v_{t}-\hat{v}_{t}\|&\leq\frac{1}{\delta}\{\|[\nabla_{x}g(x_{t},\hat{y}_{\delta}^{*})-\nabla_{x}[g(x_{t},\hat{y}^{*})]-[\nabla_{x}g(x_{t},y_{\delta}^{*})-\nabla_{x}[g(x_{t},y^{*})\|\\&\,\,\,+\ensuremath{\|\hat{\lambda}_{\delta}^{*}-\hat{\lambda}^{*}-[\lambda_{\delta}^{*}-\lambda^{*}\|\|A\|\}}\\&\leq\frac{2}{\delta}[C_{g}+\| A\|]\tilde{\delta}.
+\end{align*}
+Thus we get 
+\begin{align*}
+    \|\widetilde{\grad}F(x_{t})-\nabla F(x_{t})\|&\leq\|\grad_{x}f(x_{t},y^{*})-\grad_{x}f(x_{t},\hat{y}^{*})\|+\norm{\hat{v}^{t}-v^{t}}+\|v^{t}-\frac{dy^{*}(x^{t})}{dx}\grad_{y}f(x_{t},y^{*}(x_{t}))\|\\&\leq C_{f}\tilde{\delta}+\frac{2}{\delta}[C_{g}+\norm A]\tilde{\delta}+C_{F}\delta\\&\leq\frac{2\tilde{\delta}}{\delta}[C_{f}+C_{g}+\|A\|]+C_{F}\delta\\&\leq\frac{\epsilon^{2}}{4C_{F}R_{\mathcal{X}}}.
+\end{align*}
+
+Applied to the $C_F$-smooth hyper-objective $F$, such an inexact gradient oracle satisfies the requirement for  \cref{pr:inexact-pgd}. Thus an $\epsilon$-stationary point with $\|\mathcal{G}_F(x^t)\|\leq \epsilon$ (see Eq. \eqref{eq:gradient-mapping}  for the definition of gradient mapping) must be found in  $N=O(\frac{C_F (F(x^0)-F^*)}{\epsilon^2})$ iterations. Noting the evaluation of inexact solutions $(\hat y^*, \hat \lambda^*, \hat y_\delta^*, \hat \lambda_\delta^* )$ requires $\tilde{O}(\sqrt{C_g/\mu_g})$ first order oracle evaluations, we arrive at the total oracle complexity of $\tilde{O}(\sqrt{C_g/\mu_g}\frac{C_F (F(x^0)-F^*)}{\epsilon^2})$ for finding an $\epsilon$-stationary point. 
+
+  %  We run projected gradient descent with the inexact gradient oracle computed via \cref{{alg:LE-inexact-gradient-oracle}}. The analysis is standard, but we provide it below for completeness. First, recall that by \cref{{lem:smoothness_of_ydelstar_lamdelstar}}, we have that $F$ is a $\beta$-smooth function, where $\beta$ is a function of $C_g$, $C_f$, and $C_H$. The iterates of our algorithm are $\xkp=\xk-\pq(\xk-\frac{1}{\beta}\widetilde{\nabla}f(\xk)),$ where $\|\nabla F(x)-\widetilde{\nabla} F(x)\|\leq \delta$. 
+%Define the gradient mapping $\widetilde{G}_{\beta}(\xk)=\beta(\xk-\pq(\xk-\frac{1}{\beta}\widetilde{\nabla}f(\xk))).$
+%Then by $\beta$-smoothness of $F$, we have 
+% \begin{align*}
+% f(\xkp)  =f(\xk-\frac{1}{\beta}\widetilde{G}_{\beta}(\xk))
+%  & \leq f(\xk)-\frac{1}{\beta}\widetilde{G}_{\beta}(\xk)^{\top}\nabla f(\xk)+\frac{1}{2\beta}\|\widetilde{G}_{t}(\xk)\|^{2}\\
+%  & =f(\xk)-\frac{1}{2\beta}\|\widetilde{G}_{\beta}(\xk)\|^{2}+\frac{1}{\beta}\widetilde{G}_{\beta}(\xk)^{\top}(\widetilde{G}_{\beta}(\xk)-\nabla f(\xk)).\numberthis\label[ineq]{eq:fn_decrease_lineq_pgd}
+% \end{align*}
+% We now show that $\frac{1}{\beta}\widetilde{G}_{\beta}(\xk)^{\top}(\widetilde{G}_{\beta}(\xk)-\nabla f(\xk))\leq0.$ Let $\widetilde{y}_k = \xk-\frac{1}{\beta}\widetilde{\nabla}f(\xk)$, and let $y_k = \xk-\frac{1}{\beta}{\nabla}f(\xk)$. 
+% Then have that 
+% \begin{align*}
+% \frac{1}{\beta}\widetilde{G}_{\beta}(\xk)^{\top}(\widetilde{G}_{\beta}(\xk)-\nabla f(\xk)) & =\beta(\xk-\pq(\widetilde{y}_k))^{\top}(y_k - \pq(\widetilde{y}_k))\\
+%  & = \beta(\xk-\pq(\widetilde{y}_k))^\top (\widetilde{y}_k - \pq(\widetilde{y}_k)) \\
+%  &\quad +\beta(\xk-\pq(\widetilde{y}_k))^\top(y_k - \widetilde{y}_k)\\
+% &\leq \beta(\xk-\pq(\widetilde{y}_k))^\top(y_k - \widetilde{y}_k)\\
+% &\leq \delta \beta R,
+% \end{align*} where the penultimate inequality uses the fact that $\mathcal{X}$ is a convex set, and $R$ is the diameter of the set $X$. Combining this with \cref{eq:fn_decrease_lineq_pgd}, we have that the function decrease per iteration is \[ f(\xkp)\leq f(\xk)-\frac{1}{2\beta}\|\widetilde{G}_{\beta}(\xk)\|^{2} + \delta \beta R. \] Summing over $T=\widetilde{O}(\epsilon^{-2})$ iterations telescopes the terms and implies the desired stationarity. 
+\end{proof}
+\subsection{The cost of inexact projected gradient descent method}
+In this subsection, we state the number of iterations required by  projected gradient descent method to find an $\epsilon$-stationary point using inexact gradient oracles. Specifically, we consider the following non-convex smooth problem  where the objective $F$ is assumed to be $C_F$-Lipschitz smooth: 
+\begin{equation}\label{eq:prob-smooth-constrained}
+    \mbox{minimize}_{x\in \mathcal{X}} F(x).
+\end{equation}
+Since the feasible region $\mathcal{X}$ is compact, we use the norm of the following gradient mapping $\mathcal{G}_F(x)$ as the stationarity criterion 
+\begin{equation}\label{eq:gradient-mapping}
+    \mathcal{G}_F(x):= {C_F}(x - x^+) \text{ where } x^+ = \arg\min_{z\in \mathcal{X}} \left\| z-\left(x -\frac{1}{C_F} \nabla F(x)\right)\right\|^2.
+\end{equation}
+Initialized to some $x_0$ and the inexact gradient oracle $\widetilde{\nabla} F$, the updates of the inexact projected gradient descent method is given by 
+\begin{equation}\label{alg:inexact-projected-gd-algorithm}
+    \begin{split}
+        \text{\textbf{For}}&\text{ t=1,2,..., N \textbf{do}:}\\
+        &\text{Set } x_t \leftarrow \arg\min_{z\in \mathcal{X}} \left\| z- \left(x_{t-1}-\frac{1}{C_F}\widetilde{\nabla} F(x_{t-1})\right)\right\|^2.
+    \end{split}
+\end{equation}
+The next proposition calculates the complexity result. 
+\begin{proposition}\label{pr:inexact-pgd}
+    Consider the constrained optimization problem in \eqref{eq:prob-smooth-constrained} with $F$ being $C_F$-Lipschitz smooth and $\mathcal{X}$ having a radius of $R$. When supplied with a $\delta=\epsilon^2/4C_F R$ -inexact gradient oracle $\widetilde{\nabla} F$, that is, $\|\nabla F(x)-\widetilde{\nabla}F(x)\|\leq \delta$, the solution generated by the projected gradient descent method \eqref{alg:inexact-projected-gd-algorithm} satisfies 
+    $$\min_{t \in [N]} \| \mathcal{G}_F(x_t)\|^2 \leq \frac{C_F(F(x_0)-F^*)}{N}+\delta C_F R,$$
+    that is, it takes at most $O(\frac{C_F (F(x^0)-F^*)}{\epsilon^2})$ iterations to generate some $\bar x$ with $\|\mathcal{G}_F(x)\|\leq \epsilon$.
+
+\end{proposition}
+\begin{proof}
+    By $C_F$-smoothness of $F$, we have 
+\begin{align*}
+f(x_{t+1})  =f(x_t-\frac{1}{C_F}\widetilde{\mathcal{G}_F}(x_t))
+ & \leq f(x_t)-\frac{1}{C_F}\widetilde{\mathcal{G}_F}(x_t)^{\top}\nabla f(x_t)+\frac{1}{2C_F}\|\widetilde{\mathcal{G}_F}(x_t)\|^{2}\\
+ & =f(x_t)-\frac{1}{2C_F}\|\widetilde{\mathcal{G}_F}(x_t)(x_t)\|^{2}+\frac{1}{C_F}\widetilde{\mathcal{G}_F}(x_t)^{\top}(\widetilde{\mathcal{G}_F}(x_t)-\nabla f(x_t)).\numberthis\label[ineq]{eq:fn_decrease_lineq_pgd}
+\end{align*}
+We now show that $\frac{1}{\beta}\widetilde{\mathcal{G}_F}(x_t)^{\top}(\widetilde{\mathcal{G}_F}(x_t)-\nabla f(x_t))\leq0.$ Let $\widetilde{y}_t = x_t-\frac{1}{C_F}\widetilde{\nabla}F(x_t)$, and let $y_t = x_t-\frac{1}{C_F}{\nabla}f(x_t)$. 
+Then have that 
+\begin{align*}
+\frac{1}{C_F}\widetilde{\mathcal{G}_F}(x_t)^{\top}(\frac{1}{C_F}\widetilde{\mathcal{G}_F}(x_t)-\nabla f(x_t)) & =C_F(x_t-\pq(\widetilde{y}_t))^{\top}(y_t - \pq(\widetilde{y}_t))\\
+ & = C_F(x_t-\pq(\widetilde{y}_t))^\top (\widetilde{y}_t - \pq(\widetilde{y}_t)) \\
+ &\quad +C_F(x_t-\pq(\widetilde{y}_t))^\top(y_t - \widetilde{y}_t)\\
+&\leq C_F(x_t-\pq(\widetilde{y}_t))^\top(y_t - \widetilde{y}_t)\\
+&\leq \delta C_F  R,
+\end{align*}
+where the penultimate inequality uses the fact that $\mathcal{X}$ is a convex set, and $R$ is the diameter of the set $X$. Combining this with \cref{eq:fn_decrease_lineq_pgd}, we have that the function decrease per iteration is 
+\[ F(x_{t+1})\leq F(x_t)-\frac{1}{2C_F}\|\widetilde{\mathcal{G}_F}(x_t)\|^{2} + \delta C_F R. \] 
+
+Summing over $N$ iterations telescopes the terms, we get 
+$$\min_{t\in[N]}\|\widetilde{\mathcal{G}_F}(x_t)\|^{2}\leq \frac{1}{N} C_F (F(x^0)-F^*) + \delta C_F R.$$
+Substituting in $N=\frac{4}{\epsilon^2}C_F (F(x^0)-F^*)$  and the choice of $\delta = \epsilon^2/4C_F R$, we get 
+$$\min_{t\in[N]}\|\widetilde{\mathcal{G}_F}(x_t)\|^{2}\leq \frac{\epsilon^2}{2}.$$
+Taking into account the fact that $\|\widetilde{\mathcal{G}_F}(x_t)- \mathcal{G}_F (x_t) \|\leq \|\nabla F(x^t)-\widetilde{\nabla} F(x^t)\|\leq \delta$,  we obtain the desired result. 
+
+\end{proof}
+
+\subsection{The cost of generating approximate solutions to the linearly constrained LL problem}\label{sec:LEQ-cost-computing-ystar-lamstar}
+In this subsection, we address the issue of generating approximations to the primal and dual solutions  $(y^*,\lambda^*)$ associated with the lower-level problem in \cref{{{prob:lin-eq}}}. These approximations are required for computing the approximate hypergradient in \cref{alg:LE-inexact-gradient-oracle}.  For notational simplicity, we are going to consider the following constrained strongly convex problem: 
+\[ 
+\begin{array}{ll}
+    \mbox{minimize}_{y\in\R^d} &g(y)\\
+    \mbox{subject to } & By=b.
+\end{array}\numberthis\label[prob]{eq:simple-linear-cosntrained-problem}
+\] 
+
+We propose the following simple scheme to generate approximate solutions to \cref{{eq:simple-linear-cosntrained-problem}}. 
+\begin{center}
+\fbox{\begin{varwidth}{\dimexpr\textwidth-2\fboxsep-2\fboxrule\relax}
+  Compute a feasible $\hat{y}$  such that $\|\hat{y}-y^*\|\leq\delta$.
+  Then solve
+  
+     \begin{equation}\label{eq:approximate-lam-hat}
+        \hat\lambda = \arg\min_{\lambda \in \R^m} \|\nabla_y g(\hat y)-B^\top\lambda\|^2.
+    \end{equation}
+    
+\end{varwidth}}
+\end{center}
+
+The following lemma tells us that $\hat \lambda$ is close to $\lambda^*$ if $B$ has full row rank. 
+
+\begin{lemma}\label{lm:generating-lamhat}
+    Suppose $g$ in \cref{eq:simple-linear-cosntrained-problem} is a $C_g$-Lipschitz smooth, and the matrix $B$ has full row rank such that the following matrix $M_{B}$ is invertible
+    $$M_B =\begin{bmatrix}
+        I & B^\top\\
+        B & 0
+    \end{bmatrix}.$$
+    Then the approximate solution $(\hat \lambda, \hat y)$ from \cref{eq:approximate-lam-hat} satisfies $\|\hat\lambda -\lambda^*\|\leq \|M_{B}^{-1}\| (1+C_g)\delta$.
+\end{lemma}
+
+\begin{proof}
+    Since $(\lambda^*,y^*)$ satisfy the KKT conditions, they are the solution to the following linear system 
+    \begin{equation}\label{lmeq:ystarlamstar-equation}
+        \underbrace{\begin{bmatrix}I & B^\top\\ B & 0 \end{bmatrix}}_{=M_B} 
+    \begin{bmatrix} y^* \\ \lambda^*\end{bmatrix}
+    =\begin{bmatrix}-\nabla_y g(y^*) + I y^* \\ b\end{bmatrix}.
+    \end{equation}
+    That is %\pswt{justify invertibility of $M_B$}\jz{we can show the only solution to $M_B [y;\lambda] =0$ is zero.}
+    $$ \begin{bmatrix} y^* \\ \lambda^*\end{bmatrix}
+    =M_B^{-1}\begin{bmatrix}-\nabla_y g(y^*) + I y^* \\ b\end{bmatrix}.
+    $$
+    On the other hand, the approximate solutions $(\hat{y}, \hat{\lambda})$ in \cref{eq:approximate-lam-hat} satisfies %\pswt{sign of $-B^\top \hat{\lambda}$ seems off? in the first equation below?}\jz{fixed}
+        $$\begin{bmatrix}I & B^\top\\ B & 0 \end{bmatrix}
+    \begin{bmatrix} \hat{y} \\ \hat{\lambda}\end{bmatrix}
+    =\begin{bmatrix} B^\top \hat{\lambda} + I \hat{y} \\ b\end{bmatrix}.$$
+    We show the right hand side (r.h.s) of the above equation to be close to the r.h.s of \cref{lmeq:ystarlamstar-equation}. Let $S:=\{B^\top \lambda: \lambda\in \R^m\}$ denote the subspace spanned by the rows of $B$. We can rewrite $B^\top \hat\lambda$ as the projection of $\nabla g(\hat y)$ onto $S$, that is, 
+    \begin{align*}
+        &B^\top \hat \lambda = \arg\min_{s\in S}\|\nabla_y g(\hat y) -s\|^2\\
+     -\nabla_y g( y^*)=&B^\top \lambda^* = \arg\min_{s\in S}\|\nabla_y g( y^*) -s\|^2,
+    \end{align*}
+    where the second relation follows from the KKT conditon associated with $(\lambda^*,y^*)$. Since the projection is an non-expansive operation, we have 
+    $$\|B^\top \hat\lambda -(- \nabla_y g(y^*))\|=\|B^\top \hat \lambda - B^\top \lambda^*\|\leq \|\nabla_y g(\hat y) -\nabla g(y^*)\|\leq C_g \|\hat y - y^*\|\leq C_g \delta.$$
+    We can rewrite $(\hat y, \hat \lambda)$ as solutions to the following linear system with some $\|\tau\|\leq (1+C_g)\delta$, 
+       $$ \begin{bmatrix} \hat{y} \\ \hat \lambda\end{bmatrix}
+    =M_B^{-1}\begin{bmatrix}-\nabla_y g(y^*) + I y^* +\tau \\ b\end{bmatrix}.
+    $$
+    Thus we get 
+     $$ \|\begin{bmatrix} \hat{y} \\ \hat \lambda\end{bmatrix}-\begin{bmatrix} y^* \\ \lambda^*\end{bmatrix}\|
+    =\|M_B^{-1}\|\|\begin{bmatrix}\tau \\ 0\end{bmatrix}\leq \|M_B^{-1}\|(1+C_g)\delta.
+    $$
+    
+    %\jz{For the inequality case, similar argument might still be fine if the KKT matrix is invertible. If not, all could be lost.}
+    
+\end{proof}
+
+Now we can just use the AGD method to generate a close enough approximate solution $\hat y$ and call up the Subroutine in \cref{eq:approximate-lam-hat} to generate the approximate dual solution $\hat \lambda.$
+
+\begin{algorithm}[h]\caption{The Projected Gradient Method to Generate Primal and Dual Solutions for a Linearly Constrained Problem}\label{alg:LE-approximate-prima-dual-solution}
+\begin{algorithmic}[1]
+\State \textbf{Input}: accuracy requirement $\epsilon>0$ and linearly constrained problem $\min_{y: By =b} g(y)$.
+ \State Starting from $y^0=0$ and using $Y:=\{y\in\R^d: By=b\}$ as the simple feasible region. 
+ \State Run the Accelerated Gradient Descent (AGD) Method (Section 3.3 in \cite{lan2020first}) for $N=\lceil 4\sqrt{C_g/\mu_g}\log\frac{\|y^*\| \|M^{-1}_B\|(C_g+1)}{\mu_g\epsilon} \rceil$ iterations.
+  \State Use the $y^N$ as the approximate solution $\hat y$ to generate $\hat \lambda$ according to \cref{eq:approximate-lam-hat}.
+  \State \Return $(\hat y, \hat \lambda)$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{proposition}
+    Suppose the objective function $g$ is both $L_g$-smooth and $\mu_g$-strongly convex, and that the constraint satisfies the assumption in \cref{lm:generating-lamhat}. Fix an $\epsilon>0$, the solution  $(\hat y, \hat \lambda)$ returned by the above procedure satisfies $\|y^* - \hat y\|\leq \epsilon$ and $\|\hat \lambda - \lambda^*\|\leq \epsilon$. In another words, the cost of generating $\epsilon$-close primal and dual solutions are bounded by $O(\sqrt{\frac{C_g}{\mu_g}}\log{\frac{1}{\epsilon}}).$
+\end{proposition}
+\begin{proof}
+With $N:=\lceil 4\sqrt{C_g/\mu_g}\log\frac{\|y^*\| \|M^{-1}_B\|(L_g+1)}{\mu_g\epsilon} \rceil$, Theorem 3.7 in \cite{lan2020first} shows that $\|y^N - \hat y\|\leq \epsilon/ \|M_{B}^{-1}\| (1+L_g)$. Then we can apply \cref{lm:generating-lamhat} to obtain the desired bound.
+\end{proof}

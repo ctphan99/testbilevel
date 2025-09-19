@@ -1,0 +1,260 @@
+\section{Inequality constraints: constructing the inexact gradient oracle}\label{sec:inequality-bilevel}
+
+We first consider constrained bilevel optimization in which the lower-level constraints are defined by general convex inequality constraints, i.e., 
+% defined by 
+$S(x) \coloneqq \{ y: h(x,y) \leq 0 \}$:
+\begin{align}\label[prob]{prob:ineq}
+     \mathop{\text{minimize}}\nolimits_{x} ~ F(x) \coloneqq f(x, \ystar(x)) \quad \text{ subject to} ~\ystar(x)\in \argmin\nolimits_{y: h(x, y) \leq 0} g(x, y).
+\end{align}
+Computing a stationary point of $F$ via any first-order method would require the gradient,  given by: %
+%\jz{why run gradient descent? this line needs to be properly motivated}
+% \pswt{Kai: we wanted some notation other than $\partial F$ and $\frac{\partial y^*}{\partial x}$, right?}
+\begin{align}\label{eqn:second-order-method}
+    \nabla_x F(x) = \nabla_x f(x,y^*) + \left(\frac{ dy^*(x)}{d x}\right)^\top \nabla_y f(x,y^*),
+\end{align}
+for which the key challenge lies in computing  $\frac{d y^*(x)}{d x}$. This requires differentiating through an argmin operator, 
+% (recall $y^*(x) = \arg\min\nolimits_{y: h(x,y) \leq 0} g(x,y)$) 
+% using differentiable optimization~\cite{amos2017optnet,agrawal2019differentiable}, 
+which typically requires second-order derivatives.  
+% \jz{Why do we have to call up differentiable optimization to motivate this part?  }
+% As mentioned in \cref{sec:differentiable-optimization}, in order to compute the derivative of $F(x)$, we need to compute $\frac{dy^*}{dx}$ 
+% \pswt{$\frac{dy^*}{dx}$? forgot what notatoin we settled on}. 
+Instead, here we 
+% here we follow the technique of differentiable optimization~\cite{amos2017optnet,agrawal2019differentiable} \pswt{In the introduction, we say that diff opt requires second-order derivatives, but we are saying in the next sentence that that is what we use; a bit confusing?} to 
+differentiate (using the implicit function theorem) through the KKT conditions describing $y^*(x)$
+% using implicit function theorem
+and get: % \pswt{Some terms below are restricted to $\mathcal{I}$, while others aren't; can you define $h_{\mathcal{I}}$ and $\lambda_{\mathcal{I}}$ with dimensions?} \kai{TODO}
+% \pswt{Kai: I'm slightly confused again with the dimensions; in $H$ below, would it need to be $\nabla^2_{yy} h \lambda$ instead of $\lambda^\top \nabla_{yy}^2 h$? Same comment for the RHS with $\nabla^2_{xy} h$. Notation of $\partial$? } \kai{Either $(\nabla_{yy}^2)^\top \lambda$ or $\lambda^\top (\nabla_{yy}^2)$ works. $\lambda \in \reals^{d_h}$ is a column vector and $\nabla_{yy}^2 h \in \reals^{d_h \times d_y \times d_y}$. In Section 5, I think the corresponding $\alpha^*$ (or $\lambda^*$) should be a column vector as well and thus the matrix multiplication there might be wrong (or just use dot product instead).}
+\begin{align}\label{eqn:kkt-system}
+\begin{bmatrix}
+\nabla^2_{yy} g + \lambda^\top \nabla_{yy}^2 h & \nabla_y h_\mathcal{I}^\top \\
+\text{diag}(\lambda_\mathcal{I}) \nabla_y h_\mathcal{I} & 0
+\end{bmatrix}
+\begin{bmatrix}
+    \frac{d y^*(x)}{d x} \\
+    \frac{d \lambda_\mathcal{I}(x)}{d x}
+\end{bmatrix}
+= 
+-
+\begin{bmatrix}
+    \nabla^2_{yx} g + \lambda^\top \nabla_{yx}^2 h \\
+    \text{diag}(\lambda_\mathcal{I}) \nabla_x h_\mathcal{I}
+\end{bmatrix}
+\end{align}
+where given $x$, we define $y^*(x)$ and $\lambda(x)$ to be the primal and dual solutions to the LL problem in \cref{prob:ineq}. We denote $\mathcal{I} \coloneqq \{i \in [d_h]: h_i(x,y) = 0, \lambda_i > 0 \}$ to be the set of active constraints with non-zero dual solution, and
+$h_\mathcal{I} \coloneqq [h_i]_{i \in \mathcal{I}}$ and $\lambda_{\mathcal{I}} \coloneqq [\lambda_i]_{i \in \mathcal{I}}$ are the constraints and dual variables corresponding to the set $\mathcal{I}$. 
+The KKT system  involves only the constraints in $\mathcal{I}$ because other constraints are degenerate \pswt{phrasing unclear to me}; see \cref{sec:inactive-constraints-in-differentiable-optimization} for more details. 
+
+
+% since the inactive constraints and zero dual solution lead to degeneracy in the KKT conditions;  % \jz{how do we identify the active constraint if we are doing only finite precision calculation?} \kai{Will discuss this later.}
+
+Observe that as is, Equation \cref{eqn:kkt-system} leads to a second-order computation of $\frac{dy^*(x)}{dx}$.
+% \pswt{check notation} 
+In the rest of the section, we provide a fully first-order \emph{approximate} gradient oracle by constructing an equivalent reformulation of \cref{prob:ineq} using a penalty function (with two different penalties).
+% to provide a fully first-order inexact gradient oracle.
+% In this section, we provide a fully first-order inexact gradient oracle to compute $\frac{\partial y}{\partial x}$ with $\epsilon$ error.
+% Compared to Section~\ref{sec:equality-bilevel}, the major technical challenge in the inequality case is the non-smoothness of the optimal solution $y^*(x)$ due to potentially a different set of constraints being satisfied. Although we can still ensure the continuity and Lipschitzness of $y^*(x)$, its smoothness is no longer guaranteed.
+
+
+
+% \jz{do we still need the constraint $h(x,y)\leq 0$ in the reformulated problem? I think we would not need it for Theorem 3.1 to be valid, by Sion's minimax theorem. But I guess you need it for other reasons.} \kai{Yes, the inequality case still needs the constraint. I don't have a good intuition why it differs for ineq and eq cases.}
+
+% \noindent\textbf{Intuition:} the idea is to assume an oracle access to the dual solution $\lambda$ and construct Lagrangian based on the dual solution. Realistically, the dual solution $\lambda(x)$ is also a function of $x$, and thus the derivative should be $\frac{d}{dx} g^*_\lambda(x) = \nabla_x g(x,y^*) + \lambda^\top \nabla_x h(x,y^*) + (\nabla_x \lambda(x))^\top h(x,y^*)$. But when some nice properties hold, the zero entries of $\nabla_x \lambda(x)$ matches to the non-zero entries of $h(x,y^*)$ (complementary slackness). Therefore, we can just use the remaining terms to compute gradient.
+
+
+
+
+
+
+% They show that \cref{eqn:moreau-reformulation} is equivalent to the bilevel optimization problem, where:
+% \begin{align}\label{eqn:moreau-function-definition}
+%     v_{a,b}(x,y,z) = \min_{\theta} \max_{\beta} g(x,\theta) + \beta h(x,\theta)_+ + \frac{1}{2 a} \norm{\theta - y}^2 - \frac{1}{2 b} \norm{\beta - z}^2
+% \end{align}
+
+
+% \begin{align}
+%     & v_{a,b}(x,y,z) = g(x,\theta^*) + \beta^* h (x,\theta^*)_+ + \frac{1}{2 a} \norm{\theta^* - y}^2 - \frac{1}{2 b} \norm{\beta^* - z}^2 \\
+%     & \frac{d}{dx} v_{a,b}(x,y,z) = \frac{\partial}{\partial x} v_{a,b}(x,y,z) + \frac{\partial}{\partial \theta} v_{a,b}(x,y,z) \frac{d \theta^*}{dx} + \frac{\partial}{\partial \beta} v_{a,b}(x,y,z) \frac{d \beta^*}{dx} \\
+%     & = \frac{\partial}{\partial x} v_{a,b}(x,y,z)
+% \end{align}
+
+% According to their result, we know that the gradient of the Moreau envelop is:
+% \begin{align}\label{eqn:moreau-function-derivative}
+%     \nabla v_{a,b}(x,y,z) = (\nabla_x g(x, \theta^*) + \beta^* \nabla_x h(x, \theta^*)_+, \frac{y - \theta^*}{a}, \frac{\beta^* - z}{b})
+% \end{align}
+
+% \subsection{Why the previous algorithm is not good enough?}
+% If we just look at the reformulation in \cref{eqn:moreau-reformulation}, it asks us to solve a constrained optimization again:
+% \begin{align}
+%     \min_{x,y: h(x,y) \leq 0 ; z \geq 0} \quad & f(x,y) \\
+%     \text{s.t.} \quad & g(x,y) \leq v_{a,b}(x,y,z)
+% \end{align}
+% which ~\cite{yao2024constrained} uses a Lagrangian-style algorithm to jointly do projected gradient descent on $x,y,z$, which yields a first-order algorithm with some convergence guarantees.
+% However, their algorithm requires projecting back to the feasible region $\{ (x,y): g(x,y) \leq 0 \} $ jointly for $x$ and $y$. We know that the function $g(x,y)$ is convex in $y$ but not jointly convex for $x$ and $y$. This causes the feasible region not necessary a convex set jointly for $x$ and $y$, which makes projection a potentially non-trivial operation.
+% Therefore, the goal here is to see if we can do gradient descent on $x$ and $y$ separately, which given $x$, we can project $y$ to its convex feasible region $\{y: g(x,y) \leq 0 \}$ with no additional computation challenge.
+
+\subsection{Reformulation via the penalty method}
+We begin by reformulating \cref{prob:ineq} into a single level constrained optimization problem:
+\begin{align}\label{eqn:inequality_reformulation}
+    \text{minimize}_{x,y} ~ f(x,y)  \text{ subject to}
+    ~\begin{cases}
+        g(x,y) + \lambda(x)^\top h(x,y) \leq g^*(x) \\ 
+        h(x,y) \leq 0
+    \end{cases},
+\end{align}
+where $g^*(x)  \coloneqq \min_{y: h(x,y) \leq 0} g(x,y) = g(x,y^*(x))$ and $\lambda(x)$ is the optimal dual solution. The equivalence of this reformulation to  \cref{prob:ineq} is spelled out in \cref{appendix:reformulation-equivalence}. 
+% For a given $x$, evaluating \cref{eqn:inequality_reformulation} requires computing the primal solution $y^*(x)$ and the corresponding dual solution $\lambda(x)$ to the lower level problem.\pswt{commenting out because the sentence was not implying anything that was being used later}
+% Given the reformulated problem in \cref{eqn:inequality_reformulation}, 
+We therefore define the following penalty function, which is crucial to our analysis:
+\begin{align}
+    \mathcal{L}_{\lambda, \boldsymbol{\alpha}}(x,y) = f(x,y) + \alpha_1 \left( g(x,y) + \lambda^\top h(x,y) - g^*(x)  \right) + \frac{\alpha_2}{2} \norm{h_\mathcal{I}(x,y)}^2, \numberthis\label{eqn:penalty-lagrangian}
+\end{align}
+where $\boldsymbol{\alpha} = [\alpha_1, \alpha_2] \geq 0$ are the penalty parameters.
+Notably, given the aforementioned penalty function, we can compute its derivative with respect to $x$ as
+\begin{align*}
+    \nabla_x \mathcal{L}_{\lambda, \boldsymbol{\alpha}}(x, y) = \nabla_x f(x,y) \! + \! \alpha_1 (\nabla_x g(x,y) \! + \! \lambda^\top \nabla_x h(x,y) \! - \! \nabla_x g^*(x) ) \! + \! \alpha_2 \nabla_x h_\mathcal{I}(x,y)^\top h_\mathcal{I}(x,y).
+    % \label{eqn:lagrangian-derivative}
+\end{align*}
+
+We further define the optimal solutions to the penalty function optimization by:
+\begin{align*}
+    y_{\lambda, \boldsymbol{\alpha}}^*(x) := \arg\min\nolimits_{y} \mathcal{L}_{\lambda, \boldsymbol{\alpha}}(x,y).\numberthis\label{eq:def_y_lambda_star} 
+\end{align*}
+% where $S$ is the set of active constraints in the lower level optimization problem. This additional constraint ensures that inactive constraints in the lower level problem stay satisfied, while only the active constraints can be violated. This design choice plays an important role in the later analysis.
+
+
+
+% , and $S$ is the set of active constraints with non-zero dual solution in the lower-level problem. \pswt{already defined in the previous paragraph; removed y* and lambda because they are also already defined}
+% , and the penalty function $p(x,y) = h(x,y) - h(x,y^*) - \nabla_y h(x,y^*)^\top (y - y^*) \geq 0 ~\forall y$.
+
+ To give some intuition for our choice of two different penalties in \cref{{eqn:penalty-lagrangian}}, we note that the the two constraints in \cref{eqn:inequality_reformulation} behave quite differently.
+The first constraint $g(x,y) + \lambda(x)^\top h(x, y) \leq g^*(x)$ is one-sided, i.e., can only be violated or met, which just needs a penalty parameter $\alpha_1$ to weight the ``violation''.
+As to the second constraint $h(x,y) \leq 0$, it can be arbitrary. To allow such a ``two-sided'' constraint, we penalize only the active constraints $\mathcal{I}$, i.e., we use $\norm{h_{\mathcal{I}}(x,y)}^2$ to penalize deviation.
+
+Given this penalty function, we now show that the optimal solution to the penalty minimization is close to the optimal solution to the LL problem with a small constraint violation.
+
+% We will gradually increase $\alpha_1$ and $\alpha_2$ to increase the penalty on constraint violations.
+
+% This one is smooth but I am not sure if $\alpha \rightarrow \infty$ will lead to the same solution as the original bilevel optimization.
+
+
+% \begin{assumption}\label{assumption:smoothness} 
+%  \pswt{We seem to also use a bound on $\nabla^2_{xy}f$ in the proof of \cref{thm:diff_in_hypergrad_and_gradLagr}; is the constant for that included in the current assumption?} 
+%     \begin{itemize}
+%         \item $f(x,y), g(x,y), h(x,y)$ are smooth in $x$ and $y$ with smoothness $C_f$, $C_g$ and $C_h$, respectively.
+%         \item $f(x,y)$ is $L_f$ Lipschitz in $y$.
+%         \item $g(x,y)$ is $\mu_g$-strongly convex in $y$.
+%         \item $h(x,y)$ is convex in $y$.
+%     \end{itemize}
+% \end{assumption}
+
+
+% \begin{theorem}
+%     $g(x,y) - v_{a,b}(x,y,z,s) + \frac{b}{2} \norm{h(x,y)}^2$ is convex in $y$.
+% \end{theorem}
+% \begin{proof}
+%     Define $\phi_b(x,\theta,z) = \max_\alpha g(x,\theta) + \alpha h(x,\theta) - \frac{1}{2b} \norm{\alpha - z}^2$. We know that $v_{a,b}(x,y,z) = \min_{\theta} \phi_b(x,\theta,z) + \frac{1}{2a} \norm{\theta - y}^2$ by definition.
+
+%     Now we can compute:
+%     \begin{align}
+%         g(x,y) - v_{a,b}(x,y,z) & = g(x,y) - \min_\theta \left( \phi_b(x,\theta,z) + \frac{1}{2a} \norm{\theta - y}^2 \right) \\
+%         & \geq g(x,y) - \left( \phi_b(x,y,z) + \frac{1}{2a} \norm{y - y}^2 \right) \\
+%         & = g(x,y) - \phi_b(x,y,z) \\
+%         & = g(x,y) - \max_\alpha \left( g(x,y) + \alpha h(x,y) - \frac{1}{2b} \norm{\alpha - z}^2 \right) \\
+%         & = - \max_\alpha \left( \alpha h(x,y) - \frac{1}{2b} \norm{\alpha - z}^2 \right) \\
+%         & = - \frac{b}{2} \alpha \norm{h(x,y)}^2
+%     \end{align}
+% \end{proof}
+
+% \begin{theorem}
+%     {\color{red} $\max_{z \geq 0} v_{a,b}(x,y,z)$} is $\frac{\mu_g}{a \mu_g - 1}$-smooth in $y$.
+% \end{theorem}
+% \begin{proof}
+%     Define $\phi_b(x,\theta,z) = \max_\beta g(x,\theta) + \beta^\top h(x,\theta) - \frac{1}{2b} \norm{z - \beta}^2$, which is a maximization over strongly convex function $g(x,\theta) + \beta h(x, \theta)$. Thus $\phi_b(x,\theta,z)$ is still $\mu_g$ strongly convex in $\theta$.
+
+%     Given $\theta^*(x,y,z) = \arg\min_\theta \phi_b(x,\theta,z) + \frac{1}{2a} \norm{\theta - y}^2$, we know that:
+%     \begin{align}
+%         \frac{y - \theta^*}{a} = \nabla_y \phi(x,\theta^*,z)
+%     \end{align}
+%     For two different pairs $(x,y_1,z)$ and $(x,y_2,z)$, we can compute the difference in the gradient:
+%     \begin{align}
+%         \norm{\frac{y_1 - \theta^*_1}{a} - \frac{y_2 - \theta^*_2}{a}} & = \norm{\nabla_y \phi(x,\theta_1^*, z) - \nabla_y \phi(x, \theta^*_2, z)} \geq \mu_g \norm{\theta^*_1 - \theta^*_2} 
+%     \end{align}
+%     where the last inequality we use the $\mu_g$ strong convexity of the function $\phi$.
+    
+%     We can re-arrange the inequality to get:
+%     \begin{align}
+%         \mu_g \norm{\theta^*_1 - \theta^*_2} \leq \norm{\frac{y_1 - \theta^*_1}{a} - \frac{y_2 - \theta^*_2}{a}} \leq \frac{1}{a} \norm{y_1 - y_2} + \frac{1}{a} \norm{\theta_1 - \theta_2}
+%     \end{align}
+%     Therefore, we can bound
+%     \begin{align}
+%         (a \mu_g - 1) \norm{\theta^*_1 - \theta^*_2} \leq \norm{y_1 - y_2} 
+%     \end{align}
+
+%     Now come back to the difference of the gradients in the Moreau envelop function $v_{a,b}$. We can show that:
+%     \begin{align}
+%         \norm{\nabla_{y} v_{a,b}(x,y_1,z) - \nabla_{y} v_{a,b}(x,y_2,z)} = & \norm{\frac{y_1 - \theta^*_1}{a} - \frac{y_2 - \theta^*_2}{a}} \leq \frac{1}{a} \norm{y_1 - y_2} + \frac{1}{a} \norm{\theta_1 - \theta_2} \\
+%         \leq & \frac{1}{a} \norm{y_1 - y_2} + \frac{1}{a} \frac{1}{a \mu_g - 1} \norm{y_1 - y_2} = \frac{\mu_g}{a \mu_g - 1} \norm{y_1 - y_2}
+%     \end{align}
+%     Therefore, the Moreau envelop function $v_{a,b}(x,y,z)$ is $\frac{\mu_g}{a \mu_g - 1}$-smooth in $y$, which concludes the proof.
+% \end{proof}
+
+% {\color{red}
+% \begin{theorem}
+%     $v_{a,b}(x,y,z)$ is $\frac{1}{b}$ strongly concave in $z$.
+% \end{theorem}
+% \begin{proof}
+% % Fix $a,b>0$.
+% % Let $\psi_{x,y}^{\beta,\theta}(z):=g(x,\theta)+\beta h(x,\theta)+\frac{1}{2a}\norm{\theta-y}^2-\frac{1}{2b}\norm{z-\beta}^2$, and note that $\psi_{x,y}^{\beta,\theta}(\cdot)$ is $\frac{1}{b}$-strongly concave for any $x,y,\theta,\beta$. Hence, 
+% % $\Psi_{x,y}^{\beta}(z):=\min_{\theta}\psi_{x,y}^{\beta,\theta}(z)$ is $\frac{1}{b}$-strongly concave for any $x,y,\theta$ by preservation of strong concavity under the min operation. Therefore $-\Psi_{x,y}^{\beta}(\cdot)$ is $\frac{1}{b}$ strongly convex, hence $\max_{\beta}[-\Psi_{x,y}^{\beta}(z)]$ is $\frac{1}{b}$ strongly convex, or equivalently $-\max_{\beta}[-\Psi_{x,y}^{\beta}(z)]=-\min_{\beta}$
+% % is $\frac{1}{b}$ strongly concave,
+
+
+%     Define $\psi(x,y,\beta) = \min_\theta g(x,\theta) + \beta^\top h(x,\theta) + \frac{1}{2a} \norm{\theta - y}^2$
+%     \begin{align}
+%         \nabla_z v_{a,b}(x,y,z_1) - \nabla_z v_{a,b}(x,y,z_2) = \frac{\beta^*_1 - z_1}{b} - \frac{\beta^*_2 - z_2}{b}
+%     \end{align}
+    
+%      Kai: Somehow I feel that $v_{a,b}$ is only concave in $z$. I couldn't prove its strong concavity...
+% \end{proof}
+% }
+
+
+\begin{restatable}[]{lemma}{solutionApproximation}\label{thm:solution-bound}
+Given any $x$, the corresponding dual solution $\lambda(x)$,  primal solution $y^*(x)$ of the lower optimization problem in \cref{prob:ineq}, and $y_{\lambda, \boldsymbol{\alpha}}^*(x)$ as in \cref{{eq:def_y_lambda_star}}, satisfy:
+\begin{align}\label{eqn:solution-bound}
+    \norm{y_{\lambda, \boldsymbol{\alpha}}^*(x) - y^*(x)} \leq O(\alpha_1^{-1}) \text{~~and~~} \norm{h_\mathcal{I}(x,y_{\lambda, \boldsymbol{\alpha}}^*(x))} \leq O(\alpha_1^{-1/2} \alpha_2^{-1/2}).
+\end{align}
+\end{restatable}
+The proof of \cref{thm:solution-bound} is based on the strong convexity of $g$ for sufficiently large $\alpha_1$, and the Lipschitzness of $f$. Compared to \cite{kwon2023fully}, due to the inequality constraints, we get an additional bound on the constraint violation $h_\mathcal{I}(x,y)$. This constraint violation bound is later used in \cref{thm:diff_in_hypergrad_and_gradLagr} to bound the inexactness of our proposed gradient oracle that involves constraint violation. 
+
+% \pswt{It might be more helpful to first state why are stating this bound (so that the reader knows why they are reading \cref{thm:solution-bound}), then state the bound itself, and then provide intuition on how it's proved}\jz{I think the reader would like to see some distilled insights before going into all the algebra. Like what's challenging about the inequality setting: the KKT matrix is not invertible. Then how were you able to overcome that fundemental challengee.} \kai{Added a sentence to explain. Depending on if we have space, I can add more intuitions if needed.}
+
+
+\subsection{Main result: approximating the hypergradient}
+Based on the penalty function $\mathcal{L}_{\lambda,\alpha}(x,y)$ and its solution bounds on $y^*_{\lambda,\alpha}$ in \cref{thm:solution-bound}, the main export of this section is the following bound on the approximation of  the hypergradient. 
+\begin{restatable}[]{lemma}{gradientApproximation}\label{thm:diff_in_hypergrad_and_gradLagr}
+Consider $F$ as in \cref{{prob:ineq}},   $\mathcal{L}$ as in  \cref{{eqn:penalty-lagrangian}},  a fixed $x$, and $y_{\lambda, \boldsymbol{\alpha}}^*$ as in \cref{{eq:def_y_lambda_star}}. Then under \cref{assumption:linEq_smoothness,item:assumption_safe_constraints}, we have: 
+\begin{align*}%\label{eqn:gradient-approximation}
+   & \norm{\nabla_x F(x) - \nabla_x \mathcal{L}_{\lambda, \boldsymbol{\alpha}}(x, y_{\lambda, \boldsymbol{\alpha}}^*)} \leq O({\alpha_1^{-1}}) + O({\alpha_1^{-1/2}\alpha_2^{-1/2}}) + O({\alpha_1^{1/2}}{\alpha_2^{-1/2}}) + O({\alpha_1^{-3/2}}{\alpha_2^{1/2}}).
+\end{align*}
+\end{restatable}
+The proof can be found in \cref{appendix:proof-of-inexact-gradient}. % , which is based on bounding the gradient differences by function smoothness, primal solution and LL solution gap, and the penalty violation given by ~\cref{thm:solution-bound}.
+% Given Theorem~\ref{thm:diff_in_hypergrad_and_gradLagr}, we notice that $O(\frac{1}{\alpha_1^{1/2}\alpha_2^{1/2}})$, $O(\frac{\alpha_1^{1/2}}{\alpha_2^{1/2}})$, and $O(\frac{\alpha_2^{1/2}}{\alpha_1^{3/2}})$ are the dominating terms in the upper bound. Therefore, by setting $\alpha_1 = \alpha$ and $\alpha_2 = \alpha^2$, we can minimize their dependency on $\alpha$ and get the following theorem:
+% \begin{corollary}\label{thm:hypergradient-approximation}
+% With \cref{thm:diff_in_hypergrad_and_gradLagr} in hand, we can choose $\alpha_1 = \alpha^2$ and $\alpha_2 = \alpha^4$ to get:
+% \begin{align*}
+%     \norm{\nabla_x F(x) - \nabla_x \mathcal{L}_{\lambda, \boldsymbol{\alpha}}(x, y_{\lambda, \boldsymbol{\alpha}}^*)} \leq O({\alpha^{-1}}).
+% \end{align*} \pswt{commenting out since this is now part of the next proof}
+% \end{corollary} 
+With this hypergradient approximation guarantee, we design \cref{alg:inexact-gradient-oracle} to compute an inexact gradient oracle for the hyperobjective $F$.
+\begin{algorithm}[h]\caption{Inexact Gradient Oracle for General Inequality Constraints}\label{alg:inexact-gradient-oracle}
+\begin{algorithmic}[1]
+\State \textbf{Input:}
+Upper level variable $x$, accuracy $\alpha$, penalty parameters $\alpha_1 = {\alpha^{-2}}, \alpha_2 = {\alpha^{-4}}$.
+\State Compute $y^*$, $\lambda$, and active constraints $\mathcal{I}$ of the constrained LL problem $\min_{y: h(x,y) \leq 0} g(x,y)$. \label{line:inner-optimization-problem} % $\min\limits_{y: h(x,y) \leq 0} g(x,y)$ to obtain a primal solution $y^*$ and a dual solution $\lambda$.
+\State Define penalty function $\mathcal{L}_{\lambda, \boldsymbol{\alpha}}(x,y)$ by ~\cref{eqn:penalty-lagrangian}
+\State Compute the minimizer $y^*_{\lambda, \boldsymbol{\alpha}} = \arg\min\nolimits_{y} \mathcal{L}_{\lambda, \boldsymbol{\alpha}}(x,y)$ (as in ~\cref{eq:def_y_lambda_star}).\label{line:lagrangian-optimization}
+\State \textbf{Output:} $\widetilde{\nabla}_x F \coloneqq \nabla_x \mathcal{L}_{\lambda, \boldsymbol{\alpha}}(x,y^*_{\lambda, \boldsymbol{\alpha}})$. % \pswt{It would be good to cref an equation where this gradient is explicitly stated in terms of gradients of $f$,$g$, $h$, thus showing that this is truly first-order.}
+\end{algorithmic}
+\end{algorithm}
