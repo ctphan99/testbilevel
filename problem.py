@@ -151,6 +151,10 @@ class StronglyConvexBilevelProblem:
         """
         return x.to(device=self.device, dtype=self.dtype)
     
+    def _project_onto_box_constraints(self, y: torch.Tensor) -> torch.Tensor:
+        """Project y onto box constraints: -1 ≤ y ≤ 1"""
+        return torch.clamp(y, min=-1.0, max=1.0)
+    
     def solve_lower_level(self, x: torch.Tensor, solver: str = 'cvxpy', 
                          max_iter: int = 10000, tol: float = 1e-8, alpha: float = 0.1) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """
@@ -158,7 +162,7 @@ class StronglyConvexBilevelProblem:
         
         Args:
             x: Upper-level variable
-            solver: Solver type ('cvxpy' for accurate, 'pgd' for gradient descent)
+            solver: Solver type ('cvxpy', 'gurobi', 'pgd', 'accurate')
             max_iter: Maximum iterations
             tol: Convergence tolerance
             alpha: Accuracy parameter (δ = α³)
@@ -170,6 +174,8 @@ class StronglyConvexBilevelProblem:
         """
         if solver == 'cvxpy':
             return self._solve_cvxpy(x, alpha)
+        elif solver == 'gurobi':
+            return self._solve_gurobi(x, alpha)
         elif solver == 'pgd':
             return self._solve_pgd(x, max_iter, tol)
         elif solver == 'accurate':
@@ -208,9 +214,10 @@ class StronglyConvexBilevelProblem:
             
             # Solve using SCS solver
             problem_cvx = cp.Problem(objective, constraints)
-            problem_cvx.solve(verbose=False, solver=cp.SCS, warm_start=True)
+            problem_cvx.solve(verbose=False, solver=cp.SCS, warm_start=True, 
+                  max_iters=10000, eps=1e-6, alpha=1.0)
             
-            if problem_cvx.status == cp.OPTIMAL:
+            if problem_cvx.status in [cp.OPTIMAL, 'optimal_inaccurate']:
                 y_opt = torch.tensor(y.value, dtype=self.dtype, device=self.device)
                 
                 # Extract dual variables (stack both box sides)
@@ -239,6 +246,92 @@ class StronglyConvexBilevelProblem:
                 
         except ImportError:
             print("CVXPY not available, falling back to PGD")
+            return self._solve_pgd(x, 1000, 1e-6)
+    
+    def _solve_gurobi(self, x: torch.Tensor, alpha: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+        """
+        Solve using Gurobi QP solver - high performance for quadratic programs
+        Uses NOISY Q_lower for stochastic setting
+        """
+        try:
+            import gurobipy as gp
+            from gurobipy import GRB
+            
+            # CRITICAL: Use noisy Q_lower for stochastic setting
+            _, noise_lower = self._sample_instance_noise()
+            Q_lower_noisy = self.Q_lower + noise_lower
+            
+            # Ensure Q_lower_noisy remains positive definite
+            min_eigenval = torch.linalg.eigvals(Q_lower_noisy).real.min()
+            if min_eigenval <= 1e-8:
+                Q_lower_noisy = Q_lower_noisy + (1e-6 - min_eigenval) * torch.eye(Q_lower_noisy.shape[0], device=Q_lower_noisy.device, dtype=Q_lower_noisy.dtype)
+            
+            Q_lower_np = Q_lower_noisy.detach().cpu().numpy()
+            c_lower_np = self.c_lower.detach().cpu().numpy()
+            
+            # Create Gurobi model
+            model = gp.Model("bilevel_lower_level")
+            model.setParam('OutputFlag', 0)  # Suppress output
+            model.setParam('NumericFocus', 3)  # High numerical precision
+            model.setParam('OptimalityTol', 1e-8)
+            model.setParam('FeasibilityTol', 1e-8)
+            
+            # Create variables
+            y = model.addVars(self.dim, lb=-1.0, ub=1.0, name="y")
+            
+            # Objective: min_y 0.5 * y^T Q_lower_noisy y + c_lower^T y
+            # Gurobi expects: 0.5 * x^T Q x + c^T x
+            obj = gp.QuadExpr()
+            for i in range(self.dim):
+                for j in range(self.dim):
+                    obj += 0.5 * Q_lower_np[i, j] * y[i] * y[j]
+                obj += c_lower_np[i] * y[i]
+            
+            model.setObjective(obj, GRB.MINIMIZE)
+            
+            # Solve
+            model.optimize()
+            
+            if model.status == GRB.OPTIMAL:
+                # Extract solution
+                y_opt = torch.tensor([y[i].x for i in range(self.dim)], 
+                                   dtype=self.dtype, device=self.device)
+                
+                # Extract dual variables (Lagrange multipliers for box constraints)
+                # Gurobi provides dual values for bound constraints
+                lambda_lower = torch.tensor([y[i].RC for i in range(self.dim)], 
+                                          dtype=self.dtype, device=self.device)
+                lambda_upper = torch.tensor([y[i].RC for i in range(self.dim)], 
+                                          dtype=self.dtype, device=self.device)
+                
+                # Combine dual variables for both sides of box constraints
+                lambda_opt = torch.cat([lambda_upper, lambda_lower])
+                
+                # Compute constraint violations
+                h_val = self.constraints(x, y_opt)
+                violations = torch.clamp(h_val, min=0)
+                max_violation = torch.max(violations).item()
+                
+                info = {
+                    'status': 'optimal',
+                    'iterations': model.iterCount,
+                    'lambda': lambda_opt,
+                    'constraint_violations': violations,
+                    'converged': True,
+                    'max_violation': max_violation,
+                    'solver': 'Gurobi',
+                    'obj_value': model.objVal
+                }
+                
+                return y_opt, lambda_opt, info
+            else:
+                raise ValueError(f"Gurobi solve failed with status: {model.status}")
+                
+        except ImportError:
+            print("Gurobi not available, falling back to PGD")
+            return self._solve_pgd(x, 1000, 1e-6)
+        except Exception as e:
+            print(f"Gurobi solve error: {e}, falling back to PGD")
             return self._solve_pgd(x, 1000, 1e-6)
     
     def _solve_accurate(self, x: torch.Tensor, alpha: float, max_iter: int, tol: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
@@ -283,7 +376,7 @@ class StronglyConvexBilevelProblem:
             y_new = y - lr * grad_g
 
             # Project onto feasible region: h(x,y) ≤ 0
-            y = self._project_onto_constraints(x, y_new)
+            y = self._project_onto_box_constraints(y_new)
 
             # Check convergence
             grad_norm = torch.norm(grad_g)

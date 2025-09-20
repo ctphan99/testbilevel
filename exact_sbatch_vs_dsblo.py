@@ -92,7 +92,7 @@ class LegacyNoisyProblemAdapter:
     def solve_ll(self, x):
         import torch
         xt = torch.from_numpy(x.squeeze()).to(self.prob_t.dtype)
-        y_star_t, _ = self.prob_t.solve_lower_level(xt)
+        y_star_t, _ = self.prob_t.solve_lower_level(xt, solver=args.solver)
         y = y_star_t.cpu().numpy().reshape(-1,1)
         return y
 
@@ -133,6 +133,7 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--only-dsblo', action='store_true', help='Run only DS-BLO and plot its results')
     parser.add_argument('--only-ssigd', action='store_true', help='Run only SSIGD and plot its results')
     parser.add_argument('--ul-track-noisy-ll', action='store_true', help='Track UL using LL solved with noisy Q_lower each iter (DS-BLO)')
+    parser.add_argument('--solver', type=str, choices=['gurobi', 'cvxpy', 'pgd', 'accurate'], default='gurobi', help='Solver for lower-level optimization')
     
     args = parser.parse_args()
     
@@ -166,7 +167,7 @@ def run_exact_sbatch_vs_dsblo():
     print()
     
     # Compute initial upper-level loss
-    y0_star, _, _ = problem.solve_lower_level(x0)
+    y0_star, _, _ = problem.solve_lower_level(x0, solver=args.solver)
     initial_ul_loss = problem.upper_objective(x0, y0_star).item()
     print(f"Initial UL loss: {initial_ul_loss:.6f}")
     print()
