@@ -1,0 +1,42 @@
+{
+  "dimension": 5,
+  "device": "cpu",
+  "timestamp": "2025-09-20 16:00:28",
+  "gradient_accuracy": {
+    "gradient_differences": [
+      0.0003841053679220841,
+      0.0003841053679219342,
+      0.0003841053679220092,
+      0.0003841053679220841,
+      0.0003841053679219342
+    ],
+    "relative_errors": [
+      6.992383066826582e-05,
+      7.867660634487321e-05,
+      9.249028718054202e-05,
+      6.180012821605484e-05,
+      6.729410972399921e-05
+    ],
+    "cvxpylayers_failures": 0,
+    "direct_failures": 0,
+    "mean_grad_diff": 0.0003841053679220092,
+    "std_grad_diff": 6.703327522119024e-17,
+    "mean_rel_error": 7.403699242674702e-05,
+    "max_rel_error": 9.249028718054202e-05
+  },
+  "convergence_performance": {
+    "direct": {
+      "time": 0.5469152927398682,
+      "final_loss": -2.776816148616061,
+      "final_grad": 2.2593654227797435,
+      "converged": true
+    },
+    "cvxpylayers": {
+      "time": 0.13613438606262207,
+      "final_loss": -2.7935662721898673,
+      "final_grad": 2.259314770766519,
+      "converged": true
+    }
+  },
+  "recommendation": "USE CVXPYLayers - Better accuracy and reasonable performance"
+}

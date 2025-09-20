@@ -1,0 +1,90 @@
+{
+  "dimensions_tested": [
+    5,
+    10,
+    20,
+    50
+  ],
+  "device": "cpu",
+  "timestamp": "2025-09-20 16:02:11",
+  "scaling_results": {
+    "5": {
+      "gradient_accuracy": {
+        "mean_grad_diff": 0.00037767527925956546,
+        "mean_rel_error": 5.616723429694684e-05,
+        "max_rel_error": 6.543421527458384e-05,
+        "num_successful_tests": 3
+      },
+      "performance": {
+        "direct_time": 0.3480191230773926,
+        "cvxpylayers_time": 0.09556269645690918,
+        "direct_loss": -0.02899825111727017,
+        "cvxpylayers_loss": -0.0205815138354013,
+        "speedup": 3.641788438172841
+      }
+    },
+    "10": {
+      "gradient_accuracy": {
+        "mean_grad_diff": 0.001003854142149014,
+        "mean_rel_error": 0.00014741870430112032,
+        "max_rel_error": 0.00017603714088391812,
+        "num_successful_tests": 3
+      },
+      "performance": {
+        "direct_time": 0.8425655364990234,
+        "cvxpylayers_time": 0.21442389488220215,
+        "direct_loss": -4.198996651097502,
+        "cvxpylayers_loss": -4.193336787256249,
+        "speedup": 3.929438633515648
+      }
+    },
+    "20": {
+      "gradient_accuracy": {
+        "mean_grad_diff": 0.006490887155301452,
+        "mean_rel_error": 0.00042160922007642977,
+        "max_rel_error": 0.0004966961439980844,
+        "num_successful_tests": 3
+      },
+      "performance": {
+        "direct_time": 2.6536433696746826,
+        "cvxpylayers_time": 0.705864667892456,
+        "direct_loss": -0.6368992198444055,
+        "cvxpylayers_loss": -0.6821661363737785,
+        "speedup": 3.7594222949249327
+      }
+    },
+    "50": {
+      "gradient_accuracy": {
+        "mean_grad_diff": 0.012503785041012136,
+        "mean_rel_error": 0.00026538266601192886,
+        "max_rel_error": 0.0003589767924139199,
+        "num_successful_tests": 3
+      },
+      "performance": {
+        "direct_time": 30.95349383354187,
+        "cvxpylayers_time": 7.915625095367432,
+        "direct_loss": -42.16942484463969,
+        "cvxpylayers_loss": -44.180072871173216,
+        "speedup": 3.910429493642543
+      }
+    }
+  },
+  "stability_results": {
+    "1e-08": {
+      "direct_stability": 9.595221707632241e-08,
+      "cvxpylayers_stability": 9.595221712621506e-08,
+      "stability_ratio": 1.0000000005199738
+    },
+    "1e-06": {
+      "direct_stability": 1.1376850671524527e-05,
+      "cvxpylayers_stability": 1.137685067155073e-05,
+      "stability_ratio": 1.0000000000023033
+    },
+    "0.0001": {
+      "direct_stability": 0.0017689358467997884,
+      "cvxpylayers_stability": 0.0017689358467998031,
+      "stability_ratio": 1.0000000000000084
+    }
+  },
+  "recommendation": "STRONGLY RECOMMEND CVXPYLayers - Excellent accuracy and significant speedup"
+}
