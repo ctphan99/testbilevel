@@ -36,6 +36,9 @@ cd "$WORK_DIR"
 export PYTHONPATH="/storage/scratch1/6/cphan36/python_packages/lib/python3.10/site-packages${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH=$(cd "$WORK_DIR/.." && pwd)/BilevelLinearConstraints:$PYTHONPATH
 
+# Add CVXPYLayer to PYTHONPATH
+export PYTHONPATH="/storage/scratch1/6/cphan36/cvxpylayers:$PYTHONPATH"
+
 # Set environment variables
 export PYTHONIOENCODING='utf-8'
 export OMP_NUM_THREADS=8
