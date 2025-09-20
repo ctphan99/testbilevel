@@ -144,17 +144,10 @@ class F2CSAAlgorithm1Final:
         Returns (hypergradient, y_tilde, lambda_star)
         """
         delta = alpha ** 3  # δ = α³
-        
-        print(f"  Computing accurate lower-level solution with δ = {delta:.2e}")
-        
+                
         # Step 3: Compute ỹ*(x) and λ̃(x) by accurate solver with optional warm start
-        y_star, lambda_star, info = self.problem.solve_lower_level(x, solver='cvxpy', alpha=alpha)
+        y_star, lambda_star, info = self.problem.solve_lower_level(x, solver='gurobi', alpha=alpha)
         
-        print(f"  Lower-level solution: ỹ* = {y_star}")
-        print(f"  Lower-level multipliers: λ̃ = {lambda_star}")
-        print(f"  Lower-level info: {info}")
-        
-        print(f"  Computing penalty minimizer ỹ(x) with δ = {delta:.2e}")
         
         # Step 4: Compute ỹ(x) = argmin_y L_{λ̃,α}(x,y)
         init_y = prev_y if warm_ll and prev_y is not None else y_star
@@ -237,13 +230,13 @@ class F2CSAAlgorithm1Final:
             # Compute current loss and gradient norm
             with torch.no_grad():
                 # Get current lower-level solution
-                y_current, _, _ = self.problem.solve_lower_level(x, solver='cvxpy', alpha=alpha)
+                y_current, _, _ = self.problem.solve_lower_level(x, solver='gurobi', alpha=alpha)
                 current_loss = self.problem.upper_objective(x, y_current).item()
                 losses.append(current_loss)
             
             # Compute gradient of f(x,y) w.r.t. x for monitoring
             x_grad = x.clone().detach().requires_grad_(True)
-            y_grad, _, _ = self.problem.solve_lower_level(x_grad, solver='cvxpy', alpha=alpha)
+            y_grad, _, _ = self.problem.solve_lower_level(x_grad, solver='gurobi', alpha=alpha)
             f_val = self.problem.upper_objective(x_grad, y_grad)
             f_grad = torch.autograd.grad(f_val, x_grad, create_graph=False)[0]
             grad_norms.append(torch.norm(f_grad).item())
@@ -280,7 +273,7 @@ class F2CSAAlgorithm1Final:
         Test lower-level solution convergence with more iterations
         """
         # Get accurate lower-level solution using CVXPY
-        y_star, lambda_star, info = self.problem.solve_lower_level(x, solver='cvxpy', alpha=alpha)
+        y_star, lambda_star, info = self.problem.solve_lower_level(x, solver='gurobi', alpha=alpha)
         
         delta = alpha**3
         
@@ -317,8 +310,8 @@ class F2CSAAlgorithm1Final:
         x_minus = x - eps
         
         # Get function values (need to solve for y first)
-        y_plus, _, _ = self.problem.solve_lower_level(x_plus, solver='cvxpy', alpha=alpha)
-        y_minus, _, _ = self.problem.solve_lower_level(x_minus, solver='cvxpy', alpha=alpha)
+        y_plus, _, _ = self.problem.solve_lower_level(x_plus, solver='gurobi', alpha=alpha)
+        y_minus, _, _ = self.problem.solve_lower_level(x_minus, solver='gurobi', alpha=alpha)
         
         f_plus = self.problem.upper_objective(x_plus, y_plus)
         f_minus = self.problem.upper_objective(x_minus, y_minus)

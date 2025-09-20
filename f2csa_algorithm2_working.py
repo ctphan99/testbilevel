@@ -115,7 +115,7 @@ class F2CSAAlgorithm2Working:
                     g_t = g_t * (self.reference_grad_norm / current_norm)
 
             # Compute upper-level loss at x_t to monitor Algorithm 2 gap (f(x, y*))
-            y_star, _, _ = self.problem.solve_lower_level(x_t, solver='cvxpy', alpha=alpha)
+            y_star, _, _ = self.problem.solve_lower_level(x_t, solver='gurobi', alpha=alpha)
             # Use fixed CRN if available
             if hasattr(self, 'crn_upper'):
                 ul_loss_t = self.problem.upper_objective(x_t, y_star, self.crn_upper).item()
@@ -182,7 +182,7 @@ class F2CSAAlgorithm2Working:
             if start_idx < len(z_history):
                 z_group = z_history[start_idx:end_idx]
                 x_k = torch.stack(z_group).mean(dim=0)
-                y_star_k, _, _ = self.problem.solve_lower_level(x_k, solver='cvxpy', alpha=alpha)
+                y_star_k, _, _ = self.problem.solve_lower_level(x_k, solver='gurobi', alpha=alpha)
                 ul_loss_k = self.problem.upper_objective(x_k, y_star_k).item()
                 candidates.append((x_k, ul_loss_k))
         
@@ -201,7 +201,7 @@ class F2CSAAlgorithm2Working:
         final_g_norm = torch.norm(final_g).item()
         
         # Compute final upper-level loss f(x, y*) as Algorithm 2 gap
-        y_star, _, _ = self.problem.solve_lower_level(x_out, solver='cvxpy', alpha=alpha)
+        y_star, _, _ = self.problem.solve_lower_level(x_out, solver='gurobi', alpha=alpha)
         # Use fixed CRN if available
         if hasattr(self, 'crn_upper'):
             final_ul_loss = self.problem.upper_objective(x_out, y_star, self.crn_upper).item()

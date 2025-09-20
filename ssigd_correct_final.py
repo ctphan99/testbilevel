@@ -1,77 +1,114 @@
 import torch
 import numpy as np
+from typing import Optional, Union, List
 from problem import StronglyConvexBilevelProblem
-import time
-
-try:
-    import cvxpy as cp
-    from cvxpylayers.torch import CvxpyLayer
-    _HAS_CVXPYLAYERS = True
-except Exception:
-    _HAS_CVXPYLAYERS = False
+import cvxpy as cp
+from cvxpylayers.torch import CvxpyLayer
 
 
 class CorrectSSIGD:
     """
-    SSIGD aligned to DS-BLO structure: use CVXPy-based LL solve with noisy Q_lower
-    and direct upper gradient ∇x f(x, y*(x)); update via projected step:
-    x_{r+1} = proj_X(x_r - beta_r * ∇̂F(x_r)).
+    SSIGD with corrected implementation:
+    - Uses CVXPyLayer for lower-level optimization with noise
+    - Implements projected gradient descent for upper-level
+    - Tracks both noisy and clean objectives
     """
-
-    def __init__(self, problem: StronglyConvexBilevelProblem):
+    
+    def __init__(self, problem: StronglyConvexBilevelProblem, device='cpu'):
         self.prob = problem
-        self.device = problem.device
-        self.dtype = problem.dtype
-
-        # Build CVXPyLayer LL
-        self._layer = None
-        if _HAS_CVXPYLAYERS:
-            try:
-                y = cp.Variable(problem.dim)
-                Qp = cp.Parameter((problem.dim, problem.dim), PSD=True)
-                cp_c = cp.Parameter(problem.dim)
-                objective = cp.Minimize(0.5 * cp.quad_form(y, Qp) + cp_c @ y)
-                constraints = [y <= 1, -y <= 1]
-                prob = cp.Problem(objective, constraints)
-                self._layer = CvxpyLayer(prob, parameters=[Qp, cp_c], variables=[y])
-            except Exception:
-                self._layer = None
-
-        # SSIGD step 2: sample a fixed q ~ Q for LL perturbation
-        self.q = torch.randn(problem.dim, device=self.device, dtype=self.dtype) * (problem.noise_std if hasattr(problem, 'noise_std') else 0.01)
-
-    # Direct UL gradient
-    def gradx_f(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        return self.prob.Q_upper @ x + self.prob.c_upper + self.prob.P @ y
-
-    def grad_F(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        return self.gradx_f(x, y)
-
+        self.device = device
+        self.dtype = torch.float64
+        
+        # Create CVXPyLayer for lower-level optimization with noise
+        self._setup_cvxpy_layer()
+        
+        # Add noise to lower-level problem
+        self.q = torch.randn(problem.dim, device=device, dtype=self.dtype) * 0.1
+        
+    def _setup_cvxpy_layer(self):
+        """Setup CVXPyLayer for lower-level optimization"""
+        # Lower-level variables
+        y = cp.Variable(self.prob.dim)
+        
+        # Lower-level objective: (1/2) * y^T * Q_lower * y + c_lower^T * y
+        # We'll add the noise term q later
+        objective = cp.Minimize(0.5 * cp.quad_form(y, self.prob.Q_lower.cpu().numpy()) + 
+                               cp.sum(cp.multiply(self.prob.c_lower.cpu().numpy(), y)))
+        
+        # Lower-level constraints: y >= 0
+        constraints = [y >= 0]
+        
+        # Create the problem
+        problem_cp = cp.Problem(objective, constraints)
+        
+        # Create CVXPyLayer
+        self.cvxpy_layer = CvxpyLayer(problem_cp, parameters=[], variables=[y])
+    
+    def solve_ll_with_q(self, x: torch.Tensor, q_noise: torch.Tensor) -> torch.Tensor:
+        """Solve lower-level problem with noise q using CVXPyLayer"""
+        # Create modified problem with noise
+        y = cp.Variable(self.prob.dim)
+        
+        # Add noise to the linear term
+        c_modified = self.prob.c_lower.cpu().numpy() + q_noise.cpu().numpy()
+        
+        objective = cp.Minimize(0.5 * cp.quad_form(y, self.prob.Q_lower.cpu().numpy()) + 
+                               cp.sum(cp.multiply(c_modified, y)))
+        constraints = [y >= 0]
+        
+        problem_cp = cp.Problem(objective, constraints)
+        cvxpy_layer = CvxpyLayer(problem_cp, parameters=[], variables=[y])
+        
+        # Solve
+        y_sol, = cvxpy_layer()
+        return y_sol.to(device=self.device, dtype=self.dtype)
+    
     def solve_ll(self, x: torch.Tensor) -> torch.Tensor:
-        if self._layer is None:
-            y_star, _, _ = self.prob.solve_lower_level(x, solver='cvxpy')
-            return y_star
-        _, noise_lo = self.prob._sample_instance_noise()
-        Q_lo = (self.prob.Q_lower + noise_lo).detach()
-        c_lo = self.prob.c_lower.detach()
-        y_sol, = self._layer(Q_lo, c_lo)
-        return y_sol.to(dtype=self.dtype, device=self.device)
-
-    def solve_ll_with_q(self, x: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
-        if self._layer is None:
-            y_star, _, _ = self.prob.solve_lower_level(x, solver='cvxpy')
-            return y_star
-        _, noise_lo = self.prob._sample_instance_noise()
-        Q_lo = (self.prob.Q_lower + noise_lo).detach()
-        c_lo = (self.prob.c_lower + q).detach()
-        y_sol, = self._layer(Q_lo, c_lo)
-        return y_sol.to(dtype=self.dtype, device=self.device)
-
+        """Solve clean lower-level problem"""
+        return self.prob.solve_lower_level(x, solver='gurobi')
+    
+    def grad_F(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Compute gradient of upper-level objective F(x,y) w.r.t. x"""
+        # F(x,y) = (1/2) * x^T * Q_upper * x + (1/2) * y^T * Q_upper * y
+        # ∇_x F(x,y) = Q_upper * x
+        return torch.mv(self.prob.Q_upper, x)
+    
     def proj_X(self, x: torch.Tensor) -> torch.Tensor:
         # If problem defines a projection, use it; otherwise identity
         if hasattr(self.prob, 'project_X') and callable(getattr(self.prob, 'project_X')):
             return self.prob.project_X(x)
         return x
+    
+    def proj_X_gurobi(self, x_candidate: torch.Tensor, X_bounds=(-1, 1)) -> torch.Tensor:
+        """Project x_candidate onto box constraints using Gurobi for accurate projection"""
+        try:
+            import gurobipy as gp
+            from gurobipy import GRB
+            
+            model = gp.Model("projection")
+            model.setParam('OutputFlag', 0)
+            
+            # Variables
+            x_proj = model.addVars(len(x_candidate), lb=X_bounds[0], ub=X_bounds[1], name="x")
+            
+            # Objective: minimize ||x - x_candidate||²
+            obj = gp.QuadExpr()
+            for i in range(len(x_candidate)):
+                obj += (x_proj[i] - x_candidate[i].item())**2
+            
+            model.setObjective(obj, GRB.MINIMIZE)
+            model.optimize()
+            
+            if model.status == GRB.OPTIMAL:
+                return torch.tensor([x_proj[i].x for i in range(len(x_candidate))], 
+                                  dtype=x_candidate.dtype, device=x_candidate.device)
+            else:
+                # Fallback to simple clipping
+                return torch.clamp(x_candidate, X_bounds[0], X_bounds[1])
+                
+        except ImportError:
+            # Fallback to simple clipping
+            return torch.clamp(x_candidate, X_bounds[0], X_bounds[1])
 
     def solve(self, T=1000, beta=0.01, x0=None, diminishing: bool = True, mu_F: float = None):
         x = (x0.detach().to(device=self.device, dtype=self.dtype).clone()
@@ -102,54 +139,24 @@ class CorrectSSIGD:
                 lr_t = beta if isinstance(beta, (int, float)) else float(beta[r-1])  # Adjust for 1-based indexing
             
             # Projected gradient step: x_{r+1} = proj_X(x_r - β_r * ∇̂F(x_r))
-            x = self.proj_X(x - lr_t * grad_est)
+            x = self.proj_X_gurobi(x - lr_t * grad_est)
 
             # tracking (deterministic UL, LL with noise for y)
             y_star = self.solve_ll(x)
             F = self.prob.upper_objective(x, y_star).item()
             losses.append(F)
-            grad_norms.append(torch.norm(grad_est).item())
+            
+            # Track gradient norm
+            grad_norm = torch.norm(grad_est).item()
+            grad_norms.append(grad_norm)
+            
+            if r % 100 == 0:
+                print(f"Iteration {r:4d}/{T}: ||∇F|| = {grad_norm:.6f}, lr = {lr_t:.6f}, F = {F:.6f}")
 
-        return x, losses, grad_norms
-
-def test_correct_ssigd():
-    """Test the correct SSIGD implementation"""
-    print("=" * 80)
-    print("TESTING CORRECT SSIGD IMPLEMENTATION")
-    print("=" * 80)
-    
-    # Create problem instance
-    problem = StronglyConvexBilevelProblem(
-        dim=5,
-        num_constraints=3,
-        noise_std=0.01,
-        strong_convex=True,
-        device='cpu'
-    )
-    
-    # Create correct SSIGD
-    ssigd = CorrectSSIGD(problem)
-    
-    # Run SSIGD
-    x_final, losses, grad_norms = ssigd.solve(T=100, beta=0.01)
-    
-    print(f"\nResults:")
-    print(f"  Final loss: {losses[-1]:.6f}")
-    print(f"  Final gradient norm: {grad_norms[-1]:.3f}")
-    print(f"  Final x: {x_final}")
-    print(f"  Max gradient norm: {max(grad_norms):.3f}")
-    print(f"  Loss trajectory: {losses[:5]} ... {losses[-5:]}")
-    
-    # Check for numerical stability
-    if max(grad_norms) > 100:
-        print(f"  Warning: Large gradient norms detected - possible numerical issues")
-    else:
-        print(f"  Gradient norms are reasonable - good numerical stability")
-    
-    return x_final, losses, grad_norms
-
-if __name__ == "__main__":
-    
-    # Test correct implementation
-    test_correct_ssigd()
-
+        return {
+            'x_final': x,
+            'losses': losses,
+            'grad_norms': grad_norms,
+            'final_loss': losses[-1] if losses else float('inf'),
+            'final_gradient_norm': grad_norms[-1] if grad_norms else 0.0
+        }

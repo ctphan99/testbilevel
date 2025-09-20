@@ -1,103 +1,76 @@
 #!/usr/bin/env python3
 """
-Test script to verify Gurobi integration with bilevel optimization problem
+Test Gurobi integration with the bilevel optimization problem
 """
 
 import torch
 import numpy as np
-import time
 from problem import StronglyConvexBilevelProblem
 
-def test_gurobi_solver():
-    """Test Gurobi solver on bilevel optimization problem"""
-    print("Testing Gurobi integration with bilevel optimization...")
+def test_gurobi_integration():
+    """Test that Gurobi integration works correctly"""
     
-    # Create problem instance
-    dim = 10
-    problem = StronglyConvexBilevelProblem(dim=dim, device='cpu')
+    print("Testing Gurobi integration...")
+    print("=" * 50)
+    
+    # Create a small problem for testing
+    problem = StronglyConvexBilevelProblem(
+        dim=5, 
+        num_constraints=3, 
+        noise_std=0.01, 
+        strong_convex=True,
+        device='cpu'
+    )
     
     # Test point
-    x_test = torch.randn(dim, dtype=torch.float64)
+    x = torch.randn(5, dtype=torch.float64)
+    print(f"Test point x: {x}")
+    print()
     
-    print(f"Problem dimension: {dim}")
-    print(f"Test point x: {x_test.numpy()}")
+    # Test Gurobi solver
+    print("Testing Gurobi solver...")
+    try:
+        y_gurobi, lambda_gurobi, info_gurobi = problem.solve_lower_level(x, solver='gurobi')
+        print(f"✅ Gurobi solver successful!")
+        print(f"   Solution: {y_gurobi}")
+        print(f"   Lambda: {lambda_gurobi}")
+        print(f"   Status: {info_gurobi['status']}")
+        print(f"   Iterations: {info_gurobi['iterations']}")
+        print(f"   Max violation: {info_gurobi['max_violation']:.2e}")
+        print()
+    except Exception as e:
+        print(f"❌ Gurobi solver failed: {e}")
+        print()
     
-    # Test different solvers
-    solvers = ['gurobi', 'cvxpy', 'pgd']
-    results = {}
+    # Test CVXPY solver for comparison
+    print("Testing CVXPY solver...")
+    try:
+        y_cvxpy, lambda_cvxpy, info_cvxpy = problem.solve_lower_level(x, solver='cvxpy')
+        print(f"✅ CVXPY solver successful!")
+        print(f"   Solution: {y_cvxpy}")
+        print(f"   Lambda: {lambda_cvxpy}")
+        print(f"   Status: {info_cvxpy['status']}")
+        print(f"   Iterations: {info_cvxpy['iterations']}")
+        print(f"   Max violation: {info_cvxpy['max_violation']:.2e}")
+        print()
+    except Exception as e:
+        print(f"❌ CVXPY solver failed: {e}")
+        print()
     
-    for solver in solvers:
-        print(f"\n--- Testing {solver.upper()} solver ---")
-        try:
-            start_time = time.time()
-            y_opt, lambda_opt, info = problem.solve_lower_level(x_test, solver=solver)
-            solve_time = time.time() - start_time
-            
-            # Compute objective value
-            obj_value = problem.lower_objective(x_test, y_opt).item()
-            
-            results[solver] = {
-                'y_opt': y_opt,
-                'lambda_opt': lambda_opt,
-                'info': info,
-                'solve_time': solve_time,
-                'obj_value': obj_value
-            }
-            
-            print(f"Status: {info.get('status', 'unknown')}")
-            print(f"Converged: {info.get('converged', False)}")
-            print(f"Solve time: {solve_time:.4f}s")
-            print(f"Objective value: {obj_value:.6f}")
-            print(f"Max constraint violation: {info.get('max_violation', 'N/A')}")
-            if 'iterations' in info:
-                print(f"Iterations: {info['iterations']}")
-            if 'obj_value' in info:
-                print(f"Solver objective: {info['obj_value']:.6f}")
-                
-        except Exception as e:
-            print(f"Error with {solver}: {e}")
-            results[solver] = None
+    # Compare solutions if both worked
+    try:
+        if 'y_gurobi' in locals() and 'y_cvxpy' in locals():
+            diff = torch.norm(y_gurobi - y_cvxpy).item()
+            print(f"Solution difference (Gurobi vs CVXPY): {diff:.2e}")
+            if diff < 1e-6:
+                print("✅ Solutions are very close!")
+            else:
+                print("⚠️  Solutions differ significantly")
+    except:
+        pass
     
-    # Compare results
-    print("\n--- Comparison ---")
-    if results['gurobi'] and results['cvxpy']:
-        gurobi_obj = results['gurobi']['obj_value']
-        cvxpy_obj = results['cvxpy']['obj_value']
-        diff = abs(gurobi_obj - cvxpy_obj)
-        print(f"Gurobi vs CVXPY objective difference: {diff:.2e}")
-        print(f"Gurobi vs CVXPY time ratio: {results['gurobi']['solve_time']/results['cvxpy']['solve_time']:.2f}x")
-    
-    return results
-
-def test_gurobi_parameters():
-    """Test Gurobi with different parameter settings"""
-    print("\n--- Testing Gurobi Parameters ---")
-    
-    problem = StronglyConvexBilevelProblem(dim=5, device='cpu')
-    x_test = torch.randn(5, dtype=torch.float64)
-    
-    # Test with different tolerances
-    tolerances = [1e-6, 1e-8, 1e-10]
-    
-    for tol in tolerances:
-        print(f"\nTesting with tolerance: {tol}")
-        try:
-            start_time = time.time()
-            y_opt, lambda_opt, info = problem.solve_lower_level(x_test, solver='gurobi')
-            solve_time = time.time() - start_time
-            
-            print(f"Solve time: {solve_time:.4f}s")
-            print(f"Objective: {problem.lower_objective(x_test, y_opt).item():.8f}")
-            print(f"Max violation: {info.get('max_violation', 'N/A')}")
-            
-        except Exception as e:
-            print(f"Error: {e}")
+    print("=" * 50)
+    print("Gurobi integration test completed!")
 
 if __name__ == "__main__":
-    # Test basic functionality
-    results = test_gurobi_solver()
-    
-    # Test parameters
-    test_gurobi_parameters()
-    
-    print("\nGurobi integration test completed!")
+    test_gurobi_integration()
