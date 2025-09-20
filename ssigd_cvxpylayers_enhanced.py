@@ -28,8 +28,12 @@ class SSIGD:
         
         # Add noise to lower-level problem - both linear and quadratic terms
         # Linear noise (q) - normalized and scaled like in BilevelLinearConstraints
+        # q is added ONCE at the beginning and kept fixed throughout all iterations
         q = torch.randn(problem.dim, device=device, dtype=self.dtype)
         self.q = 1e-6 * (q / torch.norm(q))
+        
+        # Create noisy c_lower with q added once at the beginning
+        self.c_lower_noisy = problem.c_lower + self.q
         
         # Quadratic noise (Q_lower_noise) - scaled by noise_std
         # Use smaller noise scale to avoid instability
@@ -55,37 +59,41 @@ class SSIGD:
         self._setup_cvxpy_layer_with_noise()
         
     def _setup_cvxpy_layer_with_noise(self):
-        """Setup CVXPYLayers for lower-level optimization with noise parameter"""
+        """Setup CVXPYLayers for lower-level optimization with fixed noise"""
         try:
-            # Create CVXPY problem with noise parameter
+            # Create CVXPY problem with FIXED noise (dummy parameter for CVXPYLayers)
             y_cp = cp.Variable(self.prob.dim)
-            q_param = cp.Parameter(self.prob.dim)  # Linear noise parameter
+            dummy_param = cp.Parameter(1)  # Dummy parameter since CVXPYLayers requires at least one
             
-            # Objective with noise: (1/2) * y^T * Q_lower_noisy * y + (c_lower + q)^T * y
-            # Use the noisy Q_lower matrix instead of clean Q_lower
+            # Objective with FIXED noise: (1/2) * y^T * Q_lower_noisy * y + c_lower_noisy^T * y
+            # q is added once at the beginning, Q_lower_noisy is used in all iterations
+            # Include dummy_param in objective to satisfy CVXPYLayers requirement
             objective = cp.Minimize(
                 0.5 * cp.quad_form(y_cp, self.Q_lower_noisy.cpu().numpy()) + 
-                cp.sum(cp.multiply(self.prob.c_lower.cpu().numpy() + q_param, y_cp))
+                cp.sum(cp.multiply(self.c_lower_noisy.cpu().numpy(), y_cp)) +
+                0.0 * dummy_param  # Dummy term to include parameter in objective
             )
             
             # Box constraints: -1 <= y <= 1
             constraints = [y_cp >= -1, y_cp <= 1]
             
-            # Create problem and layer
+            # Create problem and layer (dummy parameter since CVXPYLayers requires at least one)
             problem_cp = cp.Problem(objective, constraints)
-            self.cvxpy_layer_noise = CvxpyLayer(problem_cp, parameters=[q_param], variables=[y_cp])
+            self.cvxpy_layer_fixed = CvxpyLayer(problem_cp, parameters=[dummy_param], variables=[y_cp])
             
-            print(f"✓ CVXPYLayers setup successful for dim={self.prob.dim} (using Q_lower_noisy)")
+            print(f"✓ CVXPYLayers setup successful for dim={self.prob.dim} (q added once, Q_lower_noisy fixed)")
             
         except Exception as e:
             print(f"✗ CVXPYLayers setup failed for dim={self.prob.dim}: {e}")
             raise RuntimeError(f"CVXPYLayers setup failed: {e}")
     
     def solve_ll_with_q_cvxpylayers(self, x: torch.Tensor, q_noise: torch.Tensor) -> torch.Tensor:
-        """Solve lower-level problem with noise using CVXPYLayers for exact gradients"""
+        """Solve lower-level problem with FIXED noise using CVXPYLayers for exact gradients"""
         try:
-            # Solve using CVXPYLayers
-            solution, = self.cvxpy_layer_noise(q_noise)
+            # Solve using CVXPYLayers with FIXED noise (dummy parameter)
+            # q is already added once at the beginning, Q_lower_noisy is fixed
+            dummy_input = torch.zeros(1, device=self.device, dtype=self.dtype)
+            solution, = self.cvxpy_layer_fixed(dummy_input)
             return solution
             
         except Exception as e:
@@ -93,7 +101,8 @@ class SSIGD:
             raise RuntimeError(f"CVXPYLayers solve failed: {e}")
     
     def solve_ll_with_q(self, x: torch.Tensor, q_noise: torch.Tensor) -> torch.Tensor:
-        """Solve lower-level problem with noise using CVXPYLayers"""
+        """Solve lower-level problem with FIXED noise using CVXPYLayers"""
+        # q_noise parameter is ignored since q is added once at the beginning
         return self.solve_ll_with_q_cvxpylayers(x, q_noise)
     
     def solve_ll(self, x: torch.Tensor) -> torch.Tensor:
@@ -160,7 +169,7 @@ class SSIGD:
         print(f"SSIGD: T={T}, beta={beta:.4f}, diminishing={diminishing}, μ_F={mu_F:.6f}")
 
         for r in range(1, T + 1):  # 1-based iteration like DS-BLO
-            # 4-5: ŷ(x_r) via CVXPy-layer with noisy Q_lower and fixed q; gradient ∇̂F(x_r)
+            # 4-5: ŷ(x_r) via CVXPy-layer with noisy Q_lower (q added once at beginning); gradient ∇̂F(x_r)
             y_hat = self.solve_ll_with_q(x, self.q)
             grad_est = self.grad_F(x, y_hat)
 
