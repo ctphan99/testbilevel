@@ -1,0 +1,9 @@
+[
+  {
+    "alpha": 0.01,
+    "eta": 5e-05,
+    "use_clipping": true,
+    "use_goldstein": true,
+    "final_loss": 7.478480600636458,
+    "convergence_status": false,
+    "converged": 

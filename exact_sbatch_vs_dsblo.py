@@ -15,7 +15,7 @@ from f2csa_algorithm_corrected_final import F2CSAAlgorithm1Final
 from f2csa_algorithm2_working import F2CSAAlgorithm2Working
 from dsblo_conservative import DSBLOConservative
 from dsblo_optII import DSBLOOptII
-from ssigd_correct_final import CorrectSSIGD
+from ssigd_cvxpylayers_enhanced import SSIGD
 import warnings
 
 # Legacy DsBlo adapter imports
@@ -121,7 +121,7 @@ def run_exact_sbatch_vs_dsblo():
     parser.add_argument('--dsblo-beta', type=float, default=0.6, help='DS-BLO momentum beta')
     parser.add_argument('--dsblo-k', type=int, default=0, help='DS-BLO gradient averaging samples')
     parser.add_argument('--dsblo-eta-cap', type=float, default=1e-2, help='DS-BLO eta cap baseline')
-    parser.add_argument('--ssigd-beta', type=float, default=0.01, help='SSIGD initial step size (defaults to 0.01)')
+    parser.add_argument('--ssigd-beta', type=float, default=None, help='SSIGD initial step size (defaults to eta value)')
     parser.add_argument('--ssigd-mu-f', type=float, default=0.1, help='SSIGD strong convexity constant (defaults to 0.1)')
     parser.add_argument('--use-crn-ul', action='store_true', help='Plot UL with a single fixed CRN noise for both methods')
     parser.add_argument('--ul-scale', type=str, choices=['linear','symlog'], default='linear', help='Y-scale for UL plots')
@@ -145,12 +145,21 @@ def run_exact_sbatch_vs_dsblo():
     # no explicit perturbation std; stochasticity comes from instance noise
     print()
     
-    # Seeding for reproducible shared x0 (optional)
+    # Seeding for reproducible shared x0 (mandatory for fair comparison)
     if args.seed is not None:
         import random
         random.seed(args.seed)
         np.random.seed(args.seed)
         torch.manual_seed(args.seed)
+        print(f"Using seed: {args.seed} for all algorithms")
+    else:
+        # Use default seed for reproducibility
+        seed = 1234
+        import random
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        print(f"Using default seed: {seed} for all algorithms")
 
     # Create problem instance (optionally align noise std)
     noise_std = args.problem_noise_std if args.problem_noise_std is not None else 0.1
@@ -165,11 +174,16 @@ def run_exact_sbatch_vs_dsblo():
     print(f"Starting point: {x0}")
     print()
     
-    # Compute initial upper-level loss
+    # Compute initial upper-level loss using deterministic y*
     y0_star, _, _ = problem.solve_lower_level(x0, solver='gurobi')
     initial_ul_loss = problem.upper_objective(x0, y0_star).item()
-    print(f"Initial UL loss: {initial_ul_loss:.6f}")
+    print(f"Initial UL loss (deterministic y*): {initial_ul_loss:.6f}")
     print()
+    
+    def compute_deterministic_loss(x):
+        """Compute upper-level loss using deterministic y* for fair comparison"""
+        y_star, _, _ = problem.solve_lower_level(x, solver='gurobi')
+        return problem.upper_objective(x, y_star).item()
     
     f2csa_results = None
     if not args.only_dsblo and not args.only_ssigd:
@@ -188,9 +202,15 @@ def run_exact_sbatch_vs_dsblo():
             plot_name=None, save_warm_name=None
         )
         
+        # Recompute final loss using deterministic y* for fair comparison
+        f2csa_final_x = f2csa_results.get('x_final', x0)  # Get final x if available
+        f2csa_deterministic_loss = compute_deterministic_loss(f2csa_final_x)
+        f2csa_results['final_ul_loss_deterministic'] = f2csa_deterministic_loss
+        
         print()
         print("F2CSA Results:")
-        print(f"  Final UL loss: {f2csa_results['final_ul_loss']:.6f}")
+        print(f"  Final UL loss (algorithm): {f2csa_results['final_ul_loss']:.6f}")
+        print(f"  Final UL loss (deterministic y*): {f2csa_deterministic_loss:.6f}")
         print(f"  Final gradient norm: {f2csa_results['final_gradient_norm']:.6f}")
         print(f"  Converged: {f2csa_results['converged']}")
         print(f"  Iterations: {f2csa_results['iterations']}")
@@ -221,9 +241,15 @@ def run_exact_sbatch_vs_dsblo():
             dsblo_results = dsblo.optimize(x0, args.T, args.alpha)
     
     if dsblo_results is not None:
+        # Recompute final loss using deterministic y* for fair comparison
+        dsblo_final_x = dsblo_results.get('x_final', x0)  # Get final x if available
+        dsblo_deterministic_loss = compute_deterministic_loss(dsblo_final_x)
+        dsblo_results['final_ul_loss_deterministic'] = dsblo_deterministic_loss
+        
         print()
         print("DS-BLO Results:")
-        print(f"  Final UL loss: {dsblo_results['final_ul_loss']:.6f}")
+        print(f"  Final UL loss (algorithm): {dsblo_results['final_ul_loss']:.6f}")
+        print(f"  Final UL loss (deterministic y*): {dsblo_deterministic_loss:.6f}")
         print(f"  Final gradient norm: {dsblo_results['final_gradient_norm']:.6f}")
         print(f"  Converged: {dsblo_results['converged']}")
         print(f"  Iterations: {dsblo_results['iterations']}")
@@ -256,7 +282,7 @@ def run_exact_sbatch_vs_dsblo():
         print("=" * 50)
         print("RUNNING SSIGD")
         print("=" * 50)
-        ssigd_algo = CorrectSSIGD(problem)
+        ssigd_algo = SSIGD(problem)
         ssigd_algo.crn_upper = crn_upper  # Set fixed CRN for UL loss evaluation
         
         # Compute μ_F for SSIGD diminishing step sizes
@@ -266,25 +292,32 @@ def run_exact_sbatch_vs_dsblo():
             mu_F = torch.linalg.eigvals(problem.Q_upper).real.min().item()
             mu_F = max(mu_F, 0.1)  # Ensure μ_F >= 0.1 for stability
         
-        # Use SSIGD-specific beta or fall back to default
-        ssigd_beta = args.ssigd_beta
+        # Use SSIGD-specific beta or fall back to eta (same as F2CSA)
+        ssigd_beta = args.ssigd_beta if args.ssigd_beta is not None else args.eta
         
-        print(f"SSIGD Parameters: T={args.T}, beta={ssigd_beta:.4f}, μ_F={mu_F:.6f}")
+        print(f"SSIGD Parameters: T={args.T}, beta={ssigd_beta:.4f} (same as eta), μ_F={mu_F:.6f}")
         
-        x_ssigd, ul_losses_ssigd, hypergrad_norms_ssigd = ssigd_algo.solve(
+        result_ssigd = ssigd_algo.solve(
             T=args.T, beta=ssigd_beta, x0=x0, diminishing=True, mu_F=mu_F
         )
         ssigd_results = {
-            'final_ul_loss': ul_losses_ssigd[-1],
-            'final_gradient_norm': hypergrad_norms_ssigd[-1],
-            'converged': hypergrad_norms_ssigd[-1] < 1e-2,  # Heuristic
-            'iterations': args.T,
-            'ul_losses': ul_losses_ssigd,
-            'hypergrad_norms': hypergrad_norms_ssigd,
+            'final_ul_loss': result_ssigd['final_loss'],
+            'final_gradient_norm': result_ssigd['final_grad_norm'],
+            'converged': result_ssigd['converged'],
+            'iterations': result_ssigd['iterations'],
+            'ul_losses': result_ssigd['losses'],
+            'hypergrad_norms': result_ssigd['grad_norms'],
         }
+        
+        # Recompute final loss using deterministic y* for fair comparison
+        ssigd_final_x = result_ssigd.get('x_final', x0)  # Get final x if available
+        ssigd_deterministic_loss = compute_deterministic_loss(ssigd_final_x)
+        ssigd_results['final_ul_loss_deterministic'] = ssigd_deterministic_loss
+        
         print()
         print("SSIGD Results:")
-        print(f"  Final UL loss: {ssigd_results['final_ul_loss']:.6f}")
+        print(f"  Final UL loss (algorithm): {ssigd_results['final_ul_loss']:.6f}")
+        print(f"  Final UL loss (deterministic y*): {ssigd_deterministic_loss:.6f}")
         print(f"  Final gradient norm: {ssigd_results['final_gradient_norm']:.6f}")
         print(f"  Converged: {ssigd_results['converged']}")
         print(f"  Iterations: {ssigd_results['iterations']}")
@@ -365,17 +398,17 @@ def run_exact_sbatch_vs_dsblo():
     print(f"{'Metric':<25} {'F2CSA (SBATCH)':<20} {'DS-BLO':<20} {'SSIGD':<20} {'Winner':<15}")
     print("-" * 100)
     
-    # Determine winners
+    # Determine winners using deterministic losses
     final_ul_losses = []
     final_grad_norms = []
     if f2csa_results is not None:
-        final_ul_losses.append(('F2CSA', f2csa_results['final_ul_loss']))
+        final_ul_losses.append(('F2CSA', f2csa_results['final_ul_loss_deterministic']))
         final_grad_norms.append(('F2CSA', f2csa_results['final_gradient_norm']))
     if dsblo_results is not None:
-        final_ul_losses.append(('DS-BLO', dsblo_results['final_ul_loss']))
+        final_ul_losses.append(('DS-BLO', dsblo_results['final_ul_loss_deterministic']))
         final_grad_norms.append(('DS-BLO', dsblo_results['final_gradient_norm']))
     if ssigd_results is not None:
-        final_ul_losses.append(('SSIGD', ssigd_results['final_ul_loss']))
+        final_ul_losses.append(('SSIGD', ssigd_results['final_ul_loss_deterministic']))
         final_grad_norms.append(('SSIGD', ssigd_results['final_gradient_norm']))
     
     ul_winner = min(final_ul_losses, key=lambda x: x[1])[0] if final_ul_losses else 'N/A'
@@ -383,10 +416,10 @@ def run_exact_sbatch_vs_dsblo():
     
     print(f"{'Initial UL Loss':<25} {initial_ul_loss:<20.6f} {initial_ul_loss:<20.6f} {initial_ul_loss:<20.6f} {'Same':<15}")
     
-    f2csa_ul = f2csa_results['final_ul_loss'] if f2csa_results is not None else '-'
-    dsblo_ul = dsblo_results['final_ul_loss'] if dsblo_results is not None else '-'
-    ssigd_ul = ssigd_results['final_ul_loss'] if ssigd_results is not None else '-'
-    print(f"{'Final UL Loss':<25} {f2csa_ul:<20} {dsblo_ul:<20} {ssigd_ul:<20} {ul_winner:<15}")
+    f2csa_ul = f2csa_results['final_ul_loss_deterministic'] if f2csa_results is not None else '-'
+    dsblo_ul = dsblo_results['final_ul_loss_deterministic'] if dsblo_results is not None else '-'
+    ssigd_ul = ssigd_results['final_ul_loss_deterministic'] if ssigd_results is not None else '-'
+    print(f"{'Final UL Loss (det y*)':<25} {f2csa_ul:<20} {dsblo_ul:<20} {ssigd_ul:<20} {ul_winner:<15}")
     
     f2csa_grad = f2csa_results['final_gradient_norm'] if f2csa_results is not None else '-'
     dsblo_grad = dsblo_results['final_gradient_norm'] if dsblo_results is not None else '-'
