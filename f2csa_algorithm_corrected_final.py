@@ -7,13 +7,17 @@ Following F2CSA_corrected.tex exactly with modified penalty parameters:
 This implementation ensures:
 1. δ-accuracy < 0.1 (δ = α³)
 2. Proper loss convergence
-3. Accurate y(x) computation using CVXPY solver
+3. Accurate y(x) computation using CvxpyQP solver
 4. Correct hypergradient computation following Algorithm 1
 """
 
 import torch
 import torch.optim as optim
 import numpy as np
+import jax
+import jax.numpy as jnp
+from jaxopt import CvxpyQP, LBFGS
+
 from typing import Dict, Optional, Tuple
 from problem import StronglyConvexBilevelProblem
 import warnings
@@ -33,61 +37,79 @@ class F2CSAAlgorithm1Final:
         self.device = device
         self.dtype = dtype
         
+        # Use CvxpyQP solver from problem.py
+        self.cvxpy_solver = CvxpyQP(solver='OSQP')
+        # Diagnostics and controls
+        self.trust_radius = 0.05  # cap ||ŷ - y*||
+        self.last_penalty_diag = {}
+        
         print(f"F2CSA Algorithm 1 Final - Corrected Implementation")
-        print(f"  Penalty parameters per F2CSA.tex: α₁ = α⁻², α₂ = α⁻⁴")
-        print(f"  Target: δ-accuracy < 0.1 (δ = α³)")
+        print(f"  Penalty parameters per F2CSA.tex: alpha1=alpha^-2, alpha2=alpha^-4")
+        print(f"  Target: delta-accuracy < 0.1 (delta = alpha^3)")
         print(f"  Device: {device}, dtype: {dtype}")
+        print(f"  Using CvxpyQP solver for lower-level problem")
     
-    def _solve_lower_level_sgd(self, x: torch.Tensor, alpha: float) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
+    def _solve_lower_level_cvxpy(self, x: jnp.ndarray, alpha: float) -> Tuple[jnp.ndarray, jnp.ndarray, Dict]:
         """
-        Fallback: Use problem's built-in PGD solver with noisy Q_lower
+        Solve lower-level problem using CvxpyQP from problem.py with dual variables - JAX version
         """
-        # Use the problem's built-in PGD solver which already handles noisy Q_lower
-        y_opt, lambda_opt, info = self.problem.solve_lower_level(x, solver='pgd', max_iter=1000, tol=1e-6)
+        # Ensure JAX array for x
+        try:
+            x = jnp.array(np.array(x))
+        except Exception:
+            x = jnp.array(x)
+        # Deterministic lower level per DS-BLO/diagnostics: no instance noise
+        noise_lower_jax = jnp.zeros_like(self.problem.Q_lower)
+        
+        # Use the problem's solve_ll_with_duals method which uses CvxpyQP directly with JAX
+        y_opt, lambda_opt, info = self.problem.solve_ll_with_duals(x, noise_lower_jax)
+        
         return y_opt, lambda_opt, info
     
     
-    def _compute_smooth_activation(self, h_val: torch.Tensor, lambda_val: torch.Tensor, delta: float) -> torch.Tensor:
+    def _compute_smooth_activation(self, h_val: jnp.ndarray, lambda_val: jnp.ndarray, delta: float) -> jnp.ndarray:
         """
-        Compute smooth activation function ρ_i(x) = σ_h(h_i(x,y)) · σ_λ(λ_i)
+        Compute smooth activation function ρ_i(x) = σ_h(h_i(x,y)) · σ_λ(λ_i) using JAX
         Following F2CSA.tex exactly with piecewise linear functions
         """
         # Parameters from paper
         tau = delta  # τ = Θ(δ)
-        epsilon_lambda = 1e-6  # Small positive parameter
+        epsilon_lambda = 1e-4  # Slightly larger to smooth switching
         
         # σ_h(z) piecewise linear function
-        sigma_h = torch.zeros_like(h_val)
+        sigma_h = jnp.zeros_like(h_val)
         mask1 = h_val < -tau * delta
         mask2 = (h_val >= -tau * delta) & (h_val < 0)
         mask3 = h_val >= 0
         
-        sigma_h[mask1] = 0.0
-        sigma_h[mask2] = (tau * delta + h_val[mask2]) / (tau * delta)
-        sigma_h[mask3] = 1.0
+        sigma_h = jnp.where(mask1, 0.0, sigma_h)
+        sigma_h = jnp.where(mask2, (tau * delta + h_val) / (tau * delta), sigma_h)
+        sigma_h = jnp.where(mask3, 1.0, sigma_h)
         
         # σ_λ(z) piecewise linear function
-        sigma_lambda = torch.zeros_like(lambda_val)
+        sigma_lambda = jnp.zeros_like(lambda_val)
         mask1_lambda = lambda_val <= 0
         mask2_lambda = (lambda_val > 0) & (lambda_val < epsilon_lambda)
         mask3_lambda = lambda_val >= epsilon_lambda
         
-        sigma_lambda[mask1_lambda] = 0.0
-        sigma_lambda[mask2_lambda] = lambda_val[mask2_lambda] / epsilon_lambda
-        sigma_lambda[mask3_lambda] = 1.0
+        sigma_lambda = jnp.where(mask1_lambda, 0.0, sigma_lambda)
+        sigma_lambda = jnp.where(mask2_lambda, lambda_val / epsilon_lambda, sigma_lambda)
+        sigma_lambda = jnp.where(mask3_lambda, 1.0, sigma_lambda)
         
         # ρ_i(x) = σ_h(h_i(x,y)) · σ_λ(λ_i) - MULTIPLICATION, not addition!
         rho = sigma_h * sigma_lambda
         
         return rho
     
-    def _compute_penalty_lagrangian(self, x: torch.Tensor, y: torch.Tensor, 
-                                  y_star: torch.Tensor, lambda_star: torch.Tensor,
-                                  alpha: float, delta: float, noise_upper: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _compute_penalty_lagrangian(self, x: jnp.ndarray, y: jnp.ndarray, 
+                                  y_star: jnp.ndarray, lambda_star: jnp.ndarray,
+                                  alpha: float, delta: float, noise_upper: Optional[jnp.ndarray] = None) -> jnp.ndarray:
         """
         Compute the smooth penalty Lagrangian L_{λ̃,α}(x,y) = f(x,y) + α₁(...) + α₂(...)
         Following F2CSA.tex Equation (415) exactly
         """
+        # Work directly with JAX arrays - no conversion needed
+        
         # Penalty parameters per F2CSA.tex
         alpha1 = 1.0 / (alpha ** 2)  # α₁ = α⁻²
         alpha2 = 1.0 / (alpha ** 4)  # α₂ = α⁻⁴
@@ -104,57 +126,129 @@ class F2CSAAlgorithm1Final:
         # Second term: α₁ * (g(x,y) + λ̃^T h(x,y) - g(x,ỹ*(x)))
         g_xy = self.problem.lower_objective(x, y)
         g_ystar = self.problem.lower_objective(x, y_star)
-        term1 = alpha1 * (g_xy + torch.sum(lambda_star * h_val) - g_ystar)
+        term1 = alpha1 * (g_xy + jnp.sum(lambda_star * h_val) - g_ystar)
         
         # Third term: α₂/2 * Σ_i ρ_i(x) * h_i(x,y)²
-        term2 = (alpha2 / 2.0) * torch.sum(rho * (h_val ** 2))
+        term2 = (alpha2 / 2.0) * jnp.sum(rho * (h_val ** 2))
         
         # Complete penalty Lagrangian: L_{λ̃,α}(x,y) = f(x,y) + α₁(...) + α₂(...)
         L_penalty = f_val + term1 + term2
         
         return L_penalty
     
-    def _minimize_penalty_lagrangian(self, x: torch.Tensor, y_star: torch.Tensor, 
-                                   lambda_star: torch.Tensor, alpha: float, delta: float,
-                                   init_y: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        Minimize the penalty Lagrangian to find ỹ(x) using built-in optimizer.
-        Uses same noise across all algorithms from the problem.
-        """
-        # Initialize y as the solution from noisy lower-level solver
-        base = init_y if init_y is not None else y_star
-        y = base.detach().requires_grad_(True)
-        
-        # Use built-in optimizer to minimize penalty Lagrangian
-        optimizer = optim.Adam([y], lr=0.01)
-        
-        # Minimize L_val = penalty_lagrangian(x, y, y_star, lambda_star, alpha, delta)
-        # Let the optimizer handle convergence automatically
-        L_val = self._compute_penalty_lagrangian(x, y, y_star, lambda_star, alpha, delta)
-        L_val.backward()
-        optimizer.step()
-        
-        return y.detach()
     
-    def oracle_sample(self, x: torch.Tensor, alpha: float, N_g: int,
-                      prev_y: Optional[torch.Tensor] = None,
-                      warm_ll: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _minimize_penalty_lagrangian(self, x: jnp.ndarray, y_star: jnp.ndarray, 
+                                   lambda_star: jnp.ndarray, alpha: float, delta: float,
+                                   init_y: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+        """
+        Minimize L within the trust ball using projected gradient with Armijo.
+        This enforces descent under ||y - y*|| ≤ trust_radius.
+        """
+        penalty_objective = lambda y: self._compute_penalty_lagrangian(x, y, y_star, lambda_star, alpha, delta)
+        grad_y = jax.grad(lambda y: self._compute_penalty_lagrangian(x, y, y_star, lambda_star, alpha, delta))
+        
+        # Initialize inside the trust region
+        if init_y is not None:
+            d0 = init_y - y_star
+            n0 = jnp.linalg.norm(d0)
+            y_curr = jnp.where(n0 > self.trust_radius, y_star + (self.trust_radius / n0) * d0, init_y)
+        else:
+            y_curr = y_star
+        
+        L_before = penalty_objective(y_curr)
+        # Projected gradient with Armijo backtracking
+        step0 = 1e-2
+        c = 1e-4
+        for _ in range(50):
+            g = grad_y(y_curr)
+            t = step0
+            Ly = penalty_objective(y_curr)
+            while t > 1e-8:
+                y_trial = y_curr - t * g
+                d = y_trial - y_star
+                n = jnp.linalg.norm(d)
+                y_trial = jnp.where(n > self.trust_radius, y_star + (self.trust_radius / n) * d, y_trial)
+                if penalty_objective(y_trial) <= Ly - c * t * jnp.linalg.norm(g) ** 2:
+                    y_curr = y_trial
+                    break
+                t *= 0.5
+            if t <= 1e-8:
+                break
+        y_candidate = y_curr
+        
+        # Final diagnostics
+        diff = y_candidate - y_star
+        diff_norm = jnp.linalg.norm(diff)
+        clipped = diff_norm > self.trust_radius + 1e-12
+        L_after = penalty_objective(y_candidate)
+        self.last_penalty_diag = {
+            'L_before': float(L_before),
+            'L_after': float(L_after),
+            'L_decrease': float(L_before - L_after),
+            'y_dist': float(diff_norm),
+            'trust_clipped': bool(clipped)
+        }
+        if clipped:
+            print(f"    [TRUST] ||ŷ−y*||={diff_norm:.4f} > {self.trust_radius:.4f} → projected")
+        if L_after > L_before - 1e-6:
+            print(f"    [L-check] No sufficient decrease: ΔL={float(L_before - L_after):.3e}")
+        else:
+            print(f"    [L-check] Decreased: ΔL={float(L_before - L_after):.3e}")
+        return y_candidate
+    
+    def oracle_sample(self, x: jnp.ndarray, alpha: float, N_g: int,
+                      prev_y: Optional[jnp.ndarray] = None,
+                      warm_ll: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """
         Implement Algorithm 1 with optional LL warm start.
         Returns (hypergradient, y_tilde, lambda_star)
         """
         delta = alpha ** 3  # δ = α³
+        # Normalize input types to JAX
+        try:
+            x = jnp.array(np.array(x))
+        except Exception:
+            x = jnp.array(x)
+        if prev_y is not None:
+            try:
+                prev_y = jnp.array(np.array(prev_y))
+            except Exception:
+                prev_y = jnp.array(prev_y)
                 
         # Step 3: Compute ỹ*(x) and λ̃(x) by accurate solver with optional warm start
-        y_star, lambda_star, info = self.problem.solve_lower_level(x, solver='gurobi', alpha=alpha)
+        y_star, lambda_star, info = self._solve_lower_level_cvxpy(x, alpha)
         
         
         # Step 4: Compute ỹ(x) = argmin_y L_{λ̃,α}(x,y)
         init_y = prev_y if warm_ll and prev_y is not None else y_star
         y_tilde = self._minimize_penalty_lagrangian(x, y_star, lambda_star, alpha, delta,
                                                     init_y=init_y)
-        
-        print(f"  Penalty minimizer: ỹ = {y_tilde}")
+        # Diagnostics: KKT, active sets, overlaps
+        G = jnp.vstack([jnp.eye(self.problem.dim), -jnp.eye(self.problem.dim)])
+        h_box = jnp.concatenate([jnp.ones(self.problem.dim), jnp.ones(self.problem.dim)])
+        # For y* (from solver)
+        kkt_star = info.get('kkt_residual', None)
+        comp_star = info.get('complementary_slackness', None)
+        # For y~ using λ* as proxy
+        grad_g_y_tilde = self.problem.grad_lower_objective_y(x, y_tilde)
+        kkt_residual_tilde = jnp.linalg.norm(grad_g_y_tilde + G.T @ lambda_star)
+        slack_tilde = h_box - G @ y_tilde
+        comp_slack_tilde = float(jnp.sum(lambda_star * slack_tilde))
+        # Active sets and overlap
+        active_star = jnp.isclose(jnp.abs(y_star), 1.0, atol=1e-6)
+        active_tilde = jnp.isclose(jnp.abs(y_tilde), 1.0, atol=1e-6)
+        overlap = int(jnp.sum(active_star & active_tilde))
+        self.last_penalty_diag.update({
+            'kkt_star': float(kkt_star) if kkt_star is not None else None,
+            'comp_star': float(comp_star) if comp_star is not None else None,
+            'kkt_tilde': float(kkt_residual_tilde),
+            'comp_tilde': float(comp_slack_tilde),
+            'active_star': int(jnp.sum(active_star)),
+            'active_tilde': int(jnp.sum(active_tilde)),
+            'active_overlap': overlap
+        })
+        print(f"    [KKT] y*: res={self.last_penalty_diag['kkt_star']:.3e}, comp={self.last_penalty_diag['comp_star']:.3e}; ỹ: res={self.last_penalty_diag['kkt_tilde']:.3e}, comp={self.last_penalty_diag['comp_tilde']:.3e}")
+        print(f"    [Active] |y*|≈1: {self.last_penalty_diag['active_star']}, |ỹ|≈1: {self.last_penalty_diag['active_tilde']}, overlap={overlap}")
         
         print(f"  Computing stochastic hypergradient with N_g = {N_g}")
         
@@ -164,24 +258,49 @@ class F2CSAAlgorithm1Final:
         for j in range(N_g):
             # Sample noise for stochastic evaluation
             noise_upper, _ = self.problem._sample_instance_noise()
-            x_grad = x.clone().detach().requires_grad_(True)
+            noise_upper_jax = jnp.array(noise_upper.detach().cpu().numpy())
             
             # Compute the penalty Lagrangian L_{λ̃,α}(x,y) with SAME stochastic noise
             # This includes f(x,y) + α₁(...) + α₂(...) as per Equation (415)
-            L_val = self._compute_penalty_lagrangian(x_grad, y_tilde, y_star, lambda_star, alpha, delta, noise_upper)
+            L_val = self._compute_penalty_lagrangian(x, y_tilde, y_star, lambda_star, alpha, delta, noise_upper_jax)
             
-            # Compute gradient of the complete penalty Lagrangian
-            grad_x = torch.autograd.grad(L_val, x_grad, create_graph=True, retain_graph=True)[0]
-            hypergradient_samples.append(grad_x.detach())
+            # Compute gradient of the complete penalty Lagrangian using JAX
+            grad_x = jax.grad(lambda x: self._compute_penalty_lagrangian(x, y_tilde, y_star, lambda_star, alpha, delta, noise_upper_jax))(x)
+            hypergradient_samples.append(grad_x)
         
-        hypergradient = torch.stack(hypergradient_samples).mean(dim=0)
+        hypergradient = jnp.mean(jnp.stack(hypergradient_samples), axis=0)
         
         print(f"  Final hypergradient: ∇F̃ = {hypergradient}")
-        print(f"  Hypergradient norm: ||∇F̃|| = {torch.norm(hypergradient).item():.6f}")
+        print(f"  Hypergradient norm: ||∇F̃|| = {jnp.linalg.norm(hypergradient):.6f}")
         
-        return hypergradient, y_tilde.detach(), lambda_star.detach()
+        return hypergradient, y_tilde, lambda_star
+
+    def finite_diff_check(self, x: jnp.ndarray, y_tilde: jnp.ndarray, y_star: jnp.ndarray,
+                          lambda_star: jnp.ndarray, alpha: float) -> Dict:
+        """
+        Finite-difference check of ∇_x L̃ with ỹ, λ̃ held fixed (no noise).
+        Checks 2 random coordinates; returns relative error stats.
+        """
+        delta = alpha ** 3
+        L_fixed = lambda x_in: self._compute_penalty_lagrangian(x_in, y_tilde, y_star, lambda_star, alpha, delta)
+        grad_auto = jax.grad(L_fixed)(x)
+        key = jax.random.PRNGKey(0)
+        idx = jax.random.choice(key, x.shape[0], (min(2, x.shape[0]),), replace=False)
+        eps = 1e-6
+        errs = []
+        for i in list(np.array(idx)):
+            e = jnp.zeros_like(x).at[i].set(1.0)
+            f_plus = L_fixed(x + eps * e)
+            f_minus = L_fixed(x - eps * e)
+            fd_i = (f_plus - f_minus) / (2 * eps)
+            rel_err = float(jnp.abs(grad_auto[i] - fd_i) / (jnp.abs(fd_i) + 1e-12))
+            errs.append(rel_err)
+        return {
+            'mean_rel_err': float(np.mean(errs)) if errs else 0.0,
+            'max_rel_err': float(np.max(errs)) if errs else 0.0
+        }
     
-    def optimize(self, x0: torch.Tensor, max_iterations: int = 1000, 
+    def optimize(self, x0: jnp.ndarray, max_iterations: int = 1000, 
                 alpha: float = 0.05, N_g: int = None, lr: float = 1e-3) -> Dict:
         """
         Optimize using corrected F2CSA Algorithm 1 with modified penalty parameters
@@ -209,8 +328,7 @@ class F2CSAAlgorithm1Final:
         print(f"  Max iterations: {max_iterations}")
         
         # Initialize
-        x = x0.clone().detach().requires_grad_(True)
-        optimizer = optim.Adam([x], lr=lr)
+        x = x0
         
         # Track progress
         losses = []
@@ -222,24 +340,18 @@ class F2CSAAlgorithm1Final:
             # Compute stochastic hypergradient using corrected Algorithm 1
             hypergradient, _, _ = self.oracle_sample(x, alpha, N_g)
             
-            # Update x
-            optimizer.zero_grad()
-            x.grad = hypergradient
-            optimizer.step()
+            # Update x using simple gradient descent
+            x = x - lr * hypergradient
             
             # Compute current loss and gradient norm
-            with torch.no_grad():
-                # Get current lower-level solution
-                y_current, _, _ = self.problem.solve_lower_level(x, solver='gurobi', alpha=alpha)
-                current_loss = self.problem.upper_objective(x, y_current).item()
-                losses.append(current_loss)
+            # Get current lower-level solution using CvxpyQP
+            y_current, _, _ = self._solve_lower_level_cvxpy(x, alpha)
+            current_loss = self.problem.upper_objective(x, y_current)
+            losses.append(float(current_loss))
             
             # Compute gradient of f(x,y) w.r.t. x for monitoring
-            x_grad = x.clone().detach().requires_grad_(True)
-            y_grad, _, _ = self.problem.solve_lower_level(x_grad, solver='gurobi', alpha=alpha)
-            f_val = self.problem.upper_objective(x_grad, y_grad)
-            f_grad = torch.autograd.grad(f_val, x_grad, create_graph=False)[0]
-            grad_norms.append(torch.norm(f_grad).item())
+            f_grad = jax.grad(lambda x: self.problem.upper_objective(x, self._solve_lower_level_cvxpy(x, alpha)[0]))(x)
+            grad_norms.append(float(jnp.linalg.norm(f_grad)))
             
             print(f"  Loss: {current_loss:.6f}")
             print(f"  Gradient norm: {grad_norms[-1]:.6f}")
@@ -272,8 +384,8 @@ class F2CSAAlgorithm1Final:
         """
         Test lower-level solution convergence with more iterations
         """
-        # Get accurate lower-level solution using CVXPY
-        y_star, lambda_star, info = self.problem.solve_lower_level(x, solver='gurobi', alpha=alpha)
+        # Get accurate lower-level solution using CvxpyQP
+        y_star, lambda_star, info = self._solve_lower_level_cvxpy(x, alpha)
         
         delta = alpha**3
         
@@ -310,8 +422,8 @@ class F2CSAAlgorithm1Final:
         x_minus = x - eps
         
         # Get function values (need to solve for y first)
-        y_plus, _, _ = self.problem.solve_lower_level(x_plus, solver='gurobi', alpha=alpha)
-        y_minus, _, _ = self.problem.solve_lower_level(x_minus, solver='gurobi', alpha=alpha)
+        y_plus, _, _ = self._solve_lower_level_cvxpy(x_plus, alpha)
+        y_minus, _, _ = self._solve_lower_level_cvxpy(x_minus, alpha)
         
         f_plus = self.problem.upper_objective(x_plus, y_plus)
         f_minus = self.problem.upper_objective(x_minus, y_minus)
