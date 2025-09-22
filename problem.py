@@ -1,612 +1,472 @@
+﻿#!/usr/bin/env python3
+"""
+Natural Bilevel Optimization Problem with JAX Ecosystem
+Uses constraint form: h(x,y) = Ax + By - b Γëñ 0
+"""
+
 import torch
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import time
-from typing import Dict, List, Tuple, Optional
+import jax
+import jax.numpy as jnp
+from typing import Tuple, Dict, Optional
 import warnings
-warnings.filterwarnings('ignore')
-import cvxpy as cp
 
 class StronglyConvexBilevelProblem:
     """
-    Strongly convex constrained bilevel optimization problem for fair algorithm comparison with enforced strong convexity
-
-    Upper level: min_x F(x,noise) = f(x, y*(x),noise)
-    Lower level: y*(x) ∈ argmin_y g(x,y,noise) s.t. h(x,y) ≤ 0
-
-    where:
-    - f(x,y) = 0.5 * (x - x_target)^T Q_upper (x - x_target) + c_upper^T y + noise
-    - g(x,y) = 0.5 * y^T Q_lower y + (c_lower + P^T x)^T y + noise
-    - h(x,y) = Ax - By - b ≤ 0 (linear constraints)
+    Natural bilevel optimization problem with constraints h(x,y) = Ax + By - b Γëñ 0
+    
+    Upper level: min_x f(x, y*(x)) where y*(x) solves:
+    Lower level: min_y g(x,y) subject to h(x,y) = Ax + By - b Γëñ 0
     """
-
-    def __init__(self, dim: int = 100, num_constraints: int = 3, noise_std: float = 0.01, device: str = 'cpu', seed: int = 42, noise_type: str = 'gaussian'):
+    
+    def __init__(self, dim: int = 10, num_constraints: int = 5, noise_std: float = 0.01, 
+                 strong_convex: bool = True, device: str = 'cpu'):
+        """
+        Initialize natural bilevel problem
+        
+        Args:
+            dim: Problem dimension
+            num_constraints: Number of inequality constraints
+            noise_std: Standard deviation for instance noise
+            strong_convex: Whether to ensure strong convexity
+            device: Device for tensors
+        """
         self.dim = dim
         self.num_constraints = num_constraints
         self.noise_std = noise_std
-        self.noise_type = noise_type  # 'gaussian', 'adversarial', 'custom'
+        self.strong_convex = strong_convex
         self.device = device
         self.dtype = torch.float64
-        torch.set_default_dtype(self.dtype)
+        
+        # Generate problem parameters directly as JAX arrays
+        self._setup_problem_parameters()
+        
+    def _setup_problem_parameters(self):
+        """Generate natural problem parameters directly as JAX arrays"""
+        
+        # Upper-level objective: f(x,y) = 0.5 * x^T Q_upper x + c_upper^T x + 0.5 * y^T P y + x^T P y
+        param_scale = 1.0
+        
+        # Generate JAX arrays directly
+        key = jax.random.PRNGKey(42)  # Fixed seed for reproducibility
+        key1, key2, key3, key4, key5, key6 = jax.random.split(key, 6)
+        
+        # Upper-level objective: f(x,y) = 0.5 * x^T Q_upper x + c_upper^T x + 0.5 * y^T P y + x^T P y
+        Q_upper_raw = jax.random.normal(key1, (self.dim, self.dim)) * param_scale
+        self.Q_upper = Q_upper_raw @ Q_upper_raw.T  # Make positive definite
+        
+        if self.strong_convex:
+            # Ensure strong convexity using JAX
+            eigenvals = jnp.linalg.eigvals(self.Q_upper).real
+            min_eigenval = jnp.min(eigenvals)
+            if min_eigenval <= 0:
+                self.Q_upper += (1.0 - min_eigenval) * jnp.eye(self.dim)
+        
+        self.c_upper = jax.random.normal(key2, (self.dim,)) * param_scale
+        P_raw = jax.random.normal(key3, (self.dim, self.dim)) * param_scale
+        # Make P matrix symmetric
+        self.P = (P_raw + P_raw.T) / 2
+        self.x_target = jax.random.normal(key4, (self.dim,)) * 0.1
+        
+        # Lower-level objective: g(x,y) = 0.5 * y^T Q_lower y + c_lower^T y + (c_lower * x)^T y
+        Q_lower_raw = jax.random.normal(key5, (self.dim, self.dim)) * param_scale
+        self.Q_lower = Q_lower_raw @ Q_lower_raw.T  # Make positive definite
+        
+        if self.strong_convex:
+            # Ensure strong convexity using JAX
+            eigenvals = jnp.linalg.eigvals(self.Q_lower).real
+            min_eigenval = jnp.min(eigenvals)
+            if min_eigenval <= 0:
+                self.Q_lower += (1.0 - min_eigenval) * jnp.eye(self.dim)
+        
+        self.c_lower = jax.random.normal(key6, (self.dim,)) * param_scale
+        
+        # Initialize qΓéÇ perturbation for SSIGD (fixed throughout optimization)
+        self.q_perturbation = jax.random.normal(jax.random.PRNGKey(123), (self.dim,)) * 1e-6
+        
+        # Box constraints: |y_i| Γëñ 1 for all i (y Γëñ 1 and -y Γëñ 1)
+        self.num_constraints = 2 * self.dim
+        
+        # Define all JAX functions
+        self._define_jax_functions()
+        
+        # Create JAX-compiled versions for optimal performance
+        self._setup_jax_compiled_functions()
+        
+        # Print problem information
+        print(f"Natural Bilevel Problem (dim={self.dim}, constraints={self.num_constraints})")
+        
+        # Check box constraint feasibility at origin
+        x0 = jnp.zeros(self.dim)
+        y0 = jnp.zeros(self.dim)
+        h0 = self.constraints(x0, y0)
+        max_violation = jnp.max(jnp.clip(h0, 0, None))
+        print(f"Constraint violations at origin: {max_violation:.6f}")
+        print("Origin is feasible - constraints may not be active" if max_violation <= 1e-6 else "Natural constraint violations present - F2CSA penalty mechanism will engage")
 
+        # Verify strong convexity using JAX arrays
+        upper_eigenvals = jnp.linalg.eigvals(self.Q_upper).real
+        lower_eigenvals = jnp.linalg.eigvals(self.Q_lower).real
 
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-
-        # STRONG CONVEXITY: Critical for F2CSA
-        # Upper level parameters with strong convexity
-        noise_scale = 0.01 / np.sqrt(dim)
-        self.Q_upper = (torch.randn(dim, dim, device=device, dtype=self.dtype) * noise_scale)
-        self.Q_upper = self.Q_upper + self.Q_upper.T  # Symmetric
-        self.Q_upper += torch.eye(dim, device=device, dtype=self.dtype) * 2.0  # Strong convexity
-
-        # Lower level parameters with strong convexity
-        self.Q_lower = (torch.randn(dim, dim, device=device, dtype=self.dtype) * noise_scale)
-        self.Q_lower = self.Q_lower + self.Q_lower.T  # Symmetric
-        self.Q_lower += torch.eye(dim, device=device, dtype=self.dtype) * 2.0  # Strong convexity
-
-        # Other parameters
-        param_scale = 0.1 / np.sqrt(dim)
-        self.c_upper = torch.randn(dim, device=device, dtype=self.dtype) * param_scale
-        self.c_lower = torch.randn(dim, device=device, dtype=self.dtype) * param_scale
-        self.P = torch.randn(dim, dim, device=device, dtype=self.dtype) * param_scale  # Coupling matrix
-        self.x_target = torch.randn(dim, device=device, dtype=self.dtype) * 0.1
-
-        # ROBUST FEASIBLE constraint generation: h(x,y) = Ax - By - b ≤ 0
-        # Use much smaller coefficients and ensure feasibility at origin
-        constraint_scale = 0.05 / np.sqrt(dim)  # Even smaller for better conditioning
-        self.A = torch.randn(num_constraints, dim, device=device, dtype=self.dtype) * constraint_scale
-        self.B = torch.randn(num_constraints, dim, device=device, dtype=self.dtype) * constraint_scale
-
-        # GUARANTEE feasibility: Set b such that origin satisfies constraints with large slack
-        # At origin: Ax - By = 0, so we need b > 0 for feasibility
-        self.b = torch.abs(torch.randn(num_constraints, device=device, dtype=self.dtype)) * 0.2 + 0.1  # Always positive
-
-        # Verify feasibility at origin
-        origin_constraint = -self.b  # Since Ax - By = 0 at origin
-        max_violation = torch.max(origin_constraint)
-        print(f"Constraint feasibility at origin: max_violation = {max_violation:.6f} (should be <= 0)")
-
-        # Verify strong convexity
-        upper_eigenvals = torch.linalg.eigvals(self.Q_upper).real
-        lower_eigenvals = torch.linalg.eigvals(self.Q_lower).real
-
-        print(f"Strongly Convex Bilevel Problem (dim={dim}, constraints={num_constraints})")
-        print(f"Upper level strong convexity: lambda_min={upper_eigenvals.min():.3f}, lambda_max={upper_eigenvals.max():.3f}")
-        print(f"Lower level strong convexity: lambda_min={lower_eigenvals.min():.3f}, lambda_max={lower_eigenvals.max():.3f}")
-        print(f"Condition numbers: Upper={upper_eigenvals.max()/upper_eigenvals.min():.2f}, Lower={lower_eigenvals.max()/lower_eigenvals.min():.2f}")
-
-    def upper_objective(self, x: torch.Tensor, y: torch.Tensor, add_noise: bool = True) -> torch.Tensor:
-        """Upper level objective with optional Gaussian noise"""
-        term1 = 0.5 * (x - self.x_target) @ self.Q_upper @ (x - self.x_target)
-        term2 = self.c_upper @ y
-
-        if add_noise:
-            noise = torch.randn_like(x) * self.noise_std
-            return term1 + term2 + noise.sum()
-        return term1 + term2
-
-    def lower_objective(self, x: torch.Tensor, y: torch.Tensor, add_noise: bool = True) -> torch.Tensor:
-        """Lower level objective with optional Gaussian noise"""
-        term1 = 0.5 * y @ self.Q_lower @ y
-        term2 = (self.c_lower + self.P.T @ x) @ y
-
-        if add_noise:
-            noise = torch.randn_like(y) * self.noise_std
-            return term1 + term2 + noise.sum()
-        return term1 + term2
-
-    def constraints(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Linear constraints h(x,y) = Ax - By - b"""
-        return self.A @ x - self.B @ y - self.b
-
-    def solve_lower_level(self, x: torch.Tensor, max_iter: int = 200, tol: float = 1e-8,
-                           y_linear_offset: Optional[torch.Tensor] = None, allow_grad: bool = False,
-                           batch_size: Optional[int] = None) -> Tuple[torch.Tensor, Dict]:
-        """
-        Solve constrained lower level QP using CVXPy (no fallbacks)
-
-        Problem: min_y 0.5 * y^T Q_lower y + (c_lower + P^T x + (y_linear_offset))^T y
-                 s.t.  By ≥ Ax - b
-
-        If y_linear_offset is provided (e.g., perturbation q), it is added to the linear term.
-        If batch_size is provided, inject stochasticity by sampling the linear term (mini-batch effect).
-        Constraints remain deterministic.
-        """
-        # Detach x unless explicit gradient-through-solver is requested (not supported here)
-        x_det = x.detach()
-
-        # Prepare problem data as numpy
-        Q = (self.Q_lower.detach().cpu().numpy() + self.Q_lower.detach().cpu().numpy().T) / 2.0
-        d_base = (self.c_lower + self.P.T @ x_det + (y_linear_offset if y_linear_offset is not None else 0.0)).detach().cpu().numpy()
-        B = self.B.detach().cpu().numpy()
-        c_vec = (self.A @ x_det - self.b).detach().cpu().numpy()
-
-        # Define and solve QP (parameterized if batch_size provided)
-        y_var = cp.Variable(self.dim)
-        d_param = cp.Parameter(self.dim)
-        objective = cp.Minimize(0.5 * cp.quad_form(y_var, Q) + d_param.T @ y_var)
-        constraints = [B @ y_var >= c_vec]
-        problem = cp.Problem(objective, constraints)
-        import time as _time
-        _t0 = _time.time()
-        if batch_size is None:
-            d_param.value = d_base
+        print(f"Upper level strong convexity: lambda_min={jnp.min(upper_eigenvals):.3f}, lambda_max={jnp.max(upper_eigenvals):.3f}")
+        print(f"Lower level strong convexity: lambda_min={jnp.min(lower_eigenvals):.3f}, lambda_max={jnp.max(lower_eigenvals):.3f}")
+        print(f"[OK] JAX parameters and functions initialized (dim={self.dim})")
+    
+    def solve_ll(self, x: jnp.ndarray, noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+        """Solve clean lower-level problem using CVXPY QP - returns only primal solution"""
+        y_opt, _, _ = self.solve_ll_with_duals(x, noise_lower)
+        return y_opt
+    
+    def solve_ll_with_duals(self, x: jnp.ndarray, noise_lower: Optional[jnp.ndarray] = None) -> Tuple[jnp.ndarray, jnp.ndarray, Dict]:
+        """Solve lower-level problem using CVXPY QP and return primal, dual variables, and info"""
+        # Prepare QP parameters
+        if noise_lower is None:
+            noise_lower_jax = jnp.zeros_like(self.Q_lower)
         else:
-            noise_scale = float(self.noise_std) / max(1.0, np.sqrt(batch_size))
-            d_param.value = d_base + np.random.randn(*d_base.shape) * noise_scale
-        problem.solve(solver=cp.SCS, verbose=False)
-        _solve_time = _time.time() - _t0
-
-        if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            raise RuntimeError(f"CVXPy LL solve failed: status={problem.status}")
-
-        y_star = torch.tensor(y_var.value, device=self.device, dtype=self.dtype)
-        lambda_dual = torch.tensor(constraints[0].dual_value, device=self.device, dtype=self.dtype)
-
-        # Diagnostics info similar to previous outputs
-        constraint_violation = float(torch.norm(torch.clamp(torch.tensor(c_vec) - torch.tensor(B) @ y_star.cpu(), min=0)))
-        stationarity_residual = (self.Q_lower @ y_star + (self.c_lower + self.P.T @ x_det)) - self.B.T @ lambda_dual
-        optimality_gap = float(torch.norm(stationarity_residual))
+            noise_lower_jax = noise_lower
+        
+        # QP objective: 0.5 * y^T Q_lower y + c_lower^T y + (c_lower * x)^T y + qΓéÇ^T y
+        Q_lower_noisy = self.Q_lower + noise_lower_jax
+        
+        # Ensure Q_lower_noisy is positive definite for CVXPY
+        eigenvals = jnp.linalg.eigvals(Q_lower_noisy).real
+        min_eigenval = jnp.min(eigenvals)
+        if min_eigenval <= 1e-6:
+            Q_lower_noisy += (1e-6 - min_eigenval) * jnp.eye(self.dim)
+        
+        c_lower_total = self.c_lower + self.c_lower * x + self.q_perturbation
+        
+        # Box constraints: -1 Γëñ y_i Γëñ 1 for all i
+        # Convert to standard form: G y Γëñ h
+        # y Γëñ 1  ΓåÆ  I y Γëñ 1
+        # -y Γëñ 1  ΓåÆ  -I y Γëñ 1
+        G = jnp.vstack([jnp.eye(self.dim), -jnp.eye(self.dim)])
+        h = jnp.concatenate([jnp.ones(self.dim), jnp.ones(self.dim)])
+        
+        # Use CVXPY QP solver
+        from jaxopt import CvxpyQP
+        
+        qp = CvxpyQP()
+        # Convert all parameters to NumPy arrays for CVXPY and enforce symmetry
+        Q_np = np.array(Q_lower_noisy)
+        Q_np = (Q_np + Q_np.T) / 2.0
+        # Ensure positive semidefinite: shift by smallest eigenvalue if needed
+        try:
+            eigvals_np = np.linalg.eigvalsh(Q_np)
+            min_eig_np = float(eigvals_np.min())
+        except Exception:
+            min_eig_np = 0.0
+        if min_eig_np < 1e-12:
+            Q_np = Q_np + (1e-12 - min_eig_np) * np.eye(self.dim)
+        c_np = np.array(c_lower_total)
+        G_np = np.array(G)
+        h_np = np.array(h)
+        # Initial guess for y
+        y_init = jnp.zeros(self.dim)
+        sol = qp.run(params_obj=(Q_np, c_np), 
+                    params_eq=None, 
+                    params_ineq=(G_np, h_np),
+                    init_params=y_init).params
+        
+        y_opt = sol.primal
+        lambda_opt = sol.dual_ineq
+        
+        # Check constraint satisfaction
+        constraint_violations = G @ y_opt - h
+        max_violation = jnp.max(jnp.clip(constraint_violations, 0, None))
+        
+        # Check KKT optimality conditions
+        grad_obj = Q_lower_noisy @ y_opt + c_lower_total
+        kkt_residual = grad_obj + G.T @ lambda_opt
+        kkt_norm = jnp.linalg.norm(kkt_residual)
+        
+        # Check complementary slackness
+        slack = h - G @ y_opt
+        comp_slack = jnp.sum(lambda_opt * slack)
+        
+        # Create info dictionary
         info = {
-            'iterations': 1,
-            'status': problem.status,
-            'converged': problem.status in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE] and constraint_violation < tol,
-            'constraint_violation': constraint_violation,
-            'optimality_gap': optimality_gap,
-            'method': 'cvxpy_scs',
-            'lambda': lambda_dual.detach(),
-            'active_mask': (self.B @ y_star - (self.A @ x_det - self.b)).abs() <= tol,
-            'solve_time_sec': _solve_time
+            'solver': 'cvxpy',
+            'status': 'optimal',
+            'objective_value': float(0.5 * jnp.dot(y_opt, Q_lower_noisy @ y_opt) + jnp.dot(c_lower_total, y_opt)),
+            'constraint_violations': float(max_violation),
+            'kkt_residual': float(kkt_norm),
+            'complementary_slackness': float(comp_slack),
+            'active_constraints': int(jnp.sum(constraint_violations > -1e-6))
         }
-        return y_star, info
-
-    def _solve_kkt_analytical(self, Q: torch.Tensor, d: torch.Tensor, B: torch.Tensor, c: torch.Tensor, tol: float) -> Tuple[torch.Tensor, torch.Tensor, bool]:
-        """
-        Solve QP using analytical KKT conditions for small problems
-
-        KKT system:
-        Q y - B^T λ = -d
-        By ≥ c, λ ≥ 0, λ^T(By - c) = 0
-        """
-        n_vars = Q.shape[0]
-        n_constraints = B.shape[0]
-
-        # Try all possible active sets (2^m possibilities)
-        best_y = None
-        best_lambda = None
-        best_objective = float('inf')
-
-        for active_mask in range(2**n_constraints):
+        
+        return y_opt, lambda_opt, info
+    
+    
+    
+    def _define_jax_functions(self):
+        """Define all JAX functions as methods"""
+        
+        def upper_objective(x: jnp.ndarray, y: jnp.ndarray, 
+                           noise_upper: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            """Upper-level objective: f(x,y) = 0.5 * x^T Q_upper x + c_upper^T x + 0.5 * y^T P y + x^T P y"""
+            if noise_upper is None:
+                noise_upper = jnp.zeros_like(self.Q_upper)
+            
+            Q_upper_noisy = self.Q_upper + noise_upper
+            return (0.5 * jnp.dot(x, Q_upper_noisy @ x) + 
+                   jnp.dot(self.c_upper, x) + 
+                   0.5 * jnp.dot(y, self.P @ y) + 
+                   jnp.dot(x, self.P @ y))
+        
+        def lower_objective(x: jnp.ndarray, y: jnp.ndarray, 
+                           noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            """Lower-level objective: g(x,y) = 0.5 * y^T Q_lower y + c_lower^T y + (c_lower * x)^T y + qΓéÇ^T y"""
+            if noise_lower is None:
+                noise_lower = jnp.zeros_like(self.Q_lower)
+            
+            Q_lower_noisy = self.Q_lower + noise_lower
+            return (0.5 * jnp.dot(y, Q_lower_noisy @ y) + 
+                   jnp.dot(self.c_lower, y) + 
+                   jnp.dot(self.c_lower * x, y) +
+                   jnp.dot(self.q_perturbation, y))  # Add qΓéÇ perturbation
+        
+        def constraints(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+            """Box constraints: y Γëñ 1 and -y Γëñ 1"""
+            return jnp.concatenate([y - 1.0, -y - 1.0])
+        
+        def grad_upper_objective_x(x: jnp.ndarray, y: jnp.ndarray, 
+                                  noise_upper: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            """Gradient of upper objective w.r.t. x: Γêçx f(x,y)"""
+            if noise_upper is None:
+                noise_upper = jnp.zeros_like(self.Q_upper)
+            
+            Q_upper_noisy = self.Q_upper + noise_upper
+            return Q_upper_noisy @ x + self.c_upper + self.P @ y
+        
+        def grad_upper_objective_y(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+            """Gradient of upper objective w.r.t. y: Γêçy f(x,y)"""
+            return self.P @ y + self.P.T @ x
+        
+        def grad_lower_objective_x(x: jnp.ndarray, y: jnp.ndarray, 
+                                  noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            """Gradient of lower objective w.r.t. x: Γêçx g(x,y)"""
+            if noise_lower is None:
+                noise_lower = jnp.zeros_like(self.Q_lower)
+            
+            return self.c_lower * y
+        
+        def grad_lower_objective_y(x: jnp.ndarray, y: jnp.ndarray, 
+                                  noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            """Gradient of lower objective w.r.t. y: Γêçy g(x,y)"""
+            if noise_lower is None:
+                noise_lower = jnp.zeros_like(self.Q_lower)
+            
+            Q_lower_noisy = self.Q_lower + noise_lower
+            return Q_lower_noisy @ y + self.c_lower + self.c_lower * x + self.q_perturbation
+        
+        def hess_lower_objective_yy(x: jnp.ndarray, y: jnp.ndarray, 
+                                   noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            """Hessian of lower objective w.r.t. y: Γêçyy g(x,y)"""
+            if noise_lower is None:
+                noise_lower = jnp.zeros_like(self.Q_lower)
+            
+            Q_lower_noisy = self.Q_lower + noise_lower
+            return Q_lower_noisy
+        
+        def jac_lower_objective_yx(x: jnp.ndarray, y: jnp.ndarray, 
+                                  noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            """Jacobian of Γêçy g w.r.t. x: Γêçyx g(x,y)"""
+            if noise_lower is None:
+                noise_lower = jnp.zeros_like(self.Q_lower)
+            
+            return jnp.diag(self.c_lower)
+        
+        def compute_implicit_gradient(x: jnp.ndarray, y: jnp.ndarray, 
+                                     noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            """Compute implicit gradient using the research paper formula:
+            Γêç╠éF(x) = Γêçx f(x, ┼╖(x)) + [Γêç╠éy*(x)]^T Γêçy f(x, ┼╖(x))
+            """
+            # Step 1: Compute Γêçx f(x, ┼╖(x))
+            grad_x_f = grad_upper_objective_x(x, y)
+            
+            # Step 2: Compute Γêçy f(x, ┼╖(x))
+            grad_y_f = grad_upper_objective_y(x, y)
+            
+            # Step 3: Compute Γêç╠éy*(x) using implicit function theorem
+            hess_yy_g = hess_lower_objective_yy(x, y, noise_lower)
+            grad_yx_g = jac_lower_objective_yx(x, y, noise_lower)
+            
+            # Apply implicit function theorem: Γêçy* = -[Γêçyy g]^{-1} Γêçyx g
             try:
-                # Determine which constraints are active
-                active_constraints = []
-                for i in range(n_constraints):
-                    if (active_mask >> i) & 1:
-                        active_constraints.append(i)
-
-                if len(active_constraints) == 0:
-                    # No active constraints - unconstrained solution
-                    y = -torch.linalg.solve(Q, d)
-                    lambda_full = torch.zeros(n_constraints, device=self.device)
-                else:
-                    # Active constraints: B_active y = c_active
-                    B_active = B[active_constraints, :]
-                    c_active = c[active_constraints]
-
-                    # Solve KKT system: [Q  -B_active^T] [y     ] = [-d      ]
-                    #                   [B_active  0  ] [lambda]   [c_active]
-
-                    kkt_matrix = torch.zeros(n_vars + len(active_constraints), n_vars + len(active_constraints), device=self.device)
-                    kkt_matrix[:n_vars, :n_vars] = Q
-                    kkt_matrix[:n_vars, n_vars:] = -B_active.T
-                    kkt_matrix[n_vars:, :n_vars] = B_active
-
-                    kkt_rhs = torch.zeros(n_vars + len(active_constraints), device=self.device)
-                    kkt_rhs[:n_vars] = -d
-                    kkt_rhs[n_vars:] = c_active
-
-                    # Solve the system
-                    kkt_solution = torch.linalg.solve(kkt_matrix, kkt_rhs)
-                    y = kkt_solution[:n_vars]
-                    lambda_active = kkt_solution[n_vars:]
-
-                    # Reconstruct full lambda vector
-                    lambda_full = torch.zeros(n_constraints, device=self.device)
-                    lambda_full[active_constraints] = lambda_active
-
-                # Check KKT conditions
-                # 1. Stationarity: Q y - B^T λ + d = 0
-                stationarity_residual = Q @ y - B.T @ lambda_full + d
-                stationarity_error = torch.norm(stationarity_residual)
-
-                # 2. Primal feasibility: By ≥ c
-                constraint_values = B @ y - c
-                primal_violation = torch.norm(torch.clamp(-constraint_values, min=0))
-
-                # 3. Dual feasibility: λ ≥ 0
-                dual_violation = torch.norm(torch.clamp(-lambda_full, min=0))
-
-                # 4. Complementary slackness: λ^T(By - c) = 0
-                complementarity_error = torch.abs(lambda_full @ constraint_values)
-
-                # Check if this is a valid KKT point
-                kkt_error = stationarity_error + primal_violation + dual_violation + complementarity_error
-
-                if kkt_error < tol:
-                    # Valid KKT point - compute objective
-                    objective = 0.5 * y @ Q @ y + d @ y
-
-                    if objective < best_objective:
-                        best_objective = objective
-                        best_y = y.clone()
-                        best_lambda = lambda_full.clone()
-
-            except Exception:
-                # This active set didn't work, try next one
-                continue
-
-        if best_y is not None:
-            return best_y, best_lambda, True
-        else:
-            return torch.zeros(n_vars, device=self.device), torch.zeros(n_constraints, device=self.device), False
-
-    def _solve_projected_gradient(self, Q: torch.Tensor, d: torch.Tensor, B: torch.Tensor, c: torch.Tensor, max_iter: int, tol: float) -> Tuple[torch.Tensor, Dict]:
-        """
-        Solve QP using projected gradient descent for larger problems
-        """
-        n_vars = Q.shape[0]
-
-        # Initialize at unconstrained optimum
-        y = -torch.linalg.solve(Q, d)
-
-        # Project onto feasible region
-        y = self._project_onto_constraints(y, B, c)
-
-        lr = 0.01
-
-        for i in range(max_iter):
-            # Gradient step
-            grad = Q @ y + d
-            y_new = y - lr * grad
-
-            # Project onto constraints
-            y = self._project_onto_constraints(y_new, B, c)
-
-            # Check convergence
-            grad_norm = torch.norm(grad)
-            constraint_violation = float(torch.norm(torch.clamp(c - B @ y, min=0)))
-
-            if grad_norm < tol and constraint_violation < tol:
-                break
-
-        # Active-set KKT refinement for exact stationarity
-        act_tol = max(1e-10, tol)
-        y_kkt = y.clone()
-        By_minus_c = B @ y_kkt - c
-        active_mask = (By_minus_c.abs() <= act_tol)
-
-        # Ensure feasibility strictly
-        viol = (c - B @ y_kkt)
-        if torch.any(viol > act_tol):
-            # Add most violated constraints
-            add_idx = torch.argmax(viol)
-            active_mask[add_idx] = True
-
-        max_refine_iters = 15
-        lam_full = torch.zeros(B.shape[0], device=B.device)
-        for _ in range(max_refine_iters):
-            active_idx = torch.where(active_mask)[0]
-            k = int(active_idx.numel())
-            if k == 0:
-                # Unconstrained step
-                y_candidate = -torch.linalg.solve(Q, d)
-                # Project if violates
-                if torch.any(c - B @ y_candidate > act_tol):
-                    worst = torch.argmax(c - B @ y_candidate)
-                    active_mask[worst] = True
-                    continue
-                y_kkt = y_candidate
-                lam_full.zero_()
-                break
-
-            B_act = B[active_idx, :]
-            # Build KKT system
-            K = torch.zeros(Q.shape[0] + k, Q.shape[1] + k, device=Q.device)
-            K[:Q.shape[0], :Q.shape[1]] = Q
-            K[:Q.shape[0], Q.shape[1]:] = -B_act.T
-            K[Q.shape[0]:, :Q.shape[1]] = B_act
-            rhs = torch.zeros(Q.shape[0] + k, device=Q.device)
-            rhs[:Q.shape[0]] = -d
-            rhs[Q.shape[0]:] = c[active_idx]
-
-            sol = torch.linalg.solve(K, rhs)
-            y_new = sol[:Q.shape[0]]
-            lam_act = sol[Q.shape[0]:]
-
-            # Enforce dual feasibility
-            if torch.any(lam_act < -1e-12):
-                # Drop most negative multiplier and retry
-                drop = active_idx[torch.argmin(lam_act)]
-                active_mask[drop] = False
-                continue
-
-            y_kkt = y_new
-            lam_full.zero_()
-            lam_full[active_idx] = lam_act
-
-            # Check primal feasibility and complementarity
-            By_minus_c = B @ y_kkt - c
-            if torch.any(By_minus_c < -act_tol):
-                # Add most violated constraint
-                add_idx = torch.argmin(By_minus_c)
-                active_mask[add_idx] = True
-                continue
-
-            # Stable active set found
-            break
-
-        # Final residuals
-        constraint_violation = float(torch.norm(torch.clamp(c - B @ y_kkt, min=0)))
-        stationarity_residual = (Q @ y_kkt + d) - B.T @ lam_full
-        kkt_residual = float(torch.norm(stationarity_residual))
-
-        info = {
-            'iterations': i + 1,
-            'converged': (constraint_violation < tol) and (kkt_residual < tol),
-            'constraint_violation': constraint_violation,
-            'optimality_gap': kkt_residual,
-            'method': 'projected_gradient_active_set_kkt',
-            'lambda': lam_full.detach(),
-            'active_mask': active_mask.detach()
-        }
-
-        return y_kkt, info
-
-    def _project_onto_constraints(self, y: torch.Tensor, B: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """
-        Project y onto the feasible region {y : By ≥ c}
-        """
-        # Simple projection: if constraints are violated, move towards feasibility
-        constraint_values = B @ y - c
-        violations = torch.clamp(-constraint_values, min=0)
-
-        if torch.norm(violations) < 1e-10:
-            return y  # Already feasible
-
-        # Move in direction of constraint normals to restore feasibility
-        correction = torch.zeros_like(y)
-        for i in range(B.shape[0]):
-            if violations[i] > 0:
-                # Move in direction of B[i] to satisfy constraint i
-                correction += violations[i] * B[i] / (torch.norm(B[i])**2 + 1e-10)
-
-        return y + correction
-
-    def true_bilevel_objective(self, x: torch.Tensor, add_noise: bool = True) -> torch.Tensor:
-        """Compute true bilevel objective F(x) = f(x, y*(x))"""
-        y_star, _ = self.solve_lower_level(x)
-        return self.upper_objective(x, y_star, add_noise=add_noise)
-
-
-
-    def compute_gap(self, x: torch.Tensor) -> float:
-        """
-        Compute exact bilevel optimality gap using KKT-based LL solution
-        Gap = ||∇_x f(x,y*(x)) + [∇y*(x)]^T ∇_y f(x,y*(x))||
-        """
-        # Solve lower level exactly using KKT conditions
-        y_star, ll_info = self.solve_lower_level(x)
-
-        # Report LL solution quality but proceed without fallbacks
-        constraint_violation = ll_info.get('constraint_violation', 0)
-        ll_converged = ll_info.get('converged', False)
-        if not ll_converged or constraint_violation > 1e-6:
-            print(f"   ⚠️  LL solution quality: conv={ll_converged}, viol={constraint_violation:.2e}")
-
-        # Compute direct gradient ∇_x f(x,y*)
-        x_copy = x.clone().requires_grad_(True)
-        y_copy = y_star.clone().requires_grad_(True)
-
-        f_val = self.upper_objective(x_copy, y_copy, add_noise=False)
-        grad_x_direct = torch.autograd.grad(f_val, x_copy, create_graph=True, retain_graph=True)[0]
-        grad_y = torch.autograd.grad(f_val, y_copy, create_graph=True, retain_graph=True)[0]
-
-        # Compute implicit gradient component ∇y*(x) using finite differences
-        eps = 1e-5
-        implicit_component = torch.zeros_like(grad_x_direct)
-
-        for i in range(x.shape[0]):
-            # Perturb x in direction i
-            x_pert = x.clone()
-            x_pert[i] += eps
-            y_pert, _ = self.solve_lower_level(x_pert)
-
-            # Finite difference approximation of ∂y*/∂x_i
-            dy_dxi = (y_pert - y_star) / eps
-
-            # Add contribution to implicit gradient
-            implicit_component[i] = torch.dot(dy_dxi, grad_y)
-
-        # Total bilevel gradient
-        total_grad = grad_x_direct + implicit_component
-        gap_value = float(torch.norm(total_grad))
-
-        print(f"   ✅ Gap: {gap_value:.6f} (direct: {torch.norm(grad_x_direct):.6f}, implicit: {torch.norm(implicit_component):.6f})")
-
-        return gap_value
-
-    def jacobian_dy_dx_if_inactive(self) -> torch.Tensor:
-        """
-        Closed-form Jacobian ∂y*/∂x for the inactive-constraints regime.
-        For g(x,y) = 0.5 y^T Q_lower y + (c_lower + P^T x)^T y, unconstrained optimum is
-        y*(x) = -Q_lower^{-1}(c_lower + P^T x) so J = ∂y*/∂x = -Q_lower^{-1} P^T.
-        """
-        # Solve Q_lower * Z = P^T  =>  Z = Q_lower^{-1} P^T
-        Z = torch.linalg.solve(self.Q_lower, self.P.T)
-        return -Z
-
-    def implicit_vector_if_inactive(self) -> torch.Tensor:
-        """
-        Analytical implicit gradient component v = J^T ∇_y f(x,y) with J from inactive regime.
-        Since ∇_y f(x,y) = c_upper (constant), v = J^T c_upper = -(P Q_lower^{-1}) c_upper.
-        """
-        J = self.jacobian_dy_dx_if_inactive()
-        return J.T @ self.c_upper
-
-    def stationary_x_star_if_inactive(self) -> torch.Tensor:
-        """
-        Stationary point solving Q_upper (x - x_target) + v = 0 with v = implicit_vector_if_inactive().
-        x* = x_target - Q_upper^{-1} v
-        """
-        v = self.implicit_vector_if_inactive()
-        # Solve Q_upper * s = v  =>  s = Q_upper^{-1} v
-        s = torch.linalg.solve(self.Q_upper, v)
-        return self.x_target - s
-
-    def print_stationary_analysis(self) -> None:
-        """
-        Print a concise analytical report explaining the observed constant implicit norm
-        and the true stationary point under inactive constraints.
-        """
-        J = self.jacobian_dy_dx_if_inactive()
-        v = J.T @ self.c_upper  # implicit vector
-        v_norm = float(torch.norm(v))
-
-        x_star = self.stationary_x_star_if_inactive()
-        # Direct part of ∇F at x is Q_upper(x - x_target)
-        direct_vec = self.Q_upper @ (x_star - self.x_target)
-        direct_norm = float(torch.norm(direct_vec))
-        total_vec = direct_vec + v
-        total_norm = float(torch.norm(total_vec))
-
-        # Check constraints at (x*, y*(x*)) to confirm inactivity
-        y_star, ll_info = self.solve_lower_level(x_star)
-        slacks = self.B @ y_star - (self.A @ x_star - self.b)
-        min_slack = float(torch.min(slacks))
-        cv = float(ll_info.get('constraint_violation', 0.0))
-
-        print("\n🔎 Stationary analysis (inactive-constraints model)")
-        print(f"   Expected implicit norm ||J^T c_upper|| = {v_norm:.6f}")
-        print(f"   x* solves Q_upper(x - x_target) + v = 0")
-        print(f"   At x*: ||direct|| = {direct_norm:.6f}, ||direct + implicit|| = {total_norm:.6f}")
-        print(f"   Constraint check at x*: CV={cv:.2e}, min_slack={min_slack:.3e} (inactive if > 0)")
-
-
-    def compute_true_bilevel_gradient(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Return the total bilevel gradient at x and its components (direct, implicit).
-        total = ∇_x f(x,y*(x)) + [∂y*/∂x]^T ∇_y f(x,y*(x))
-        """
-        # Solve lower level exactly using KKT conditions
-        y_star, _ = self.solve_lower_level(x)
-        # Direct component
-        x_copy = x.clone().requires_grad_(True)
-        y_copy = y_star.clone().requires_grad_(True)
-        f_val = self.upper_objective(x_copy, y_copy, add_noise=False)
-        grad_x_direct = torch.autograd.grad(f_val, x_copy, create_graph=True, retain_graph=True)[0]
-        grad_y = torch.autograd.grad(f_val, y_copy, create_graph=True, retain_graph=True)[0]
-        # Finite-difference implicit Jacobian-vector product
-        eps = 1e-5
-        implicit_component = torch.zeros_like(grad_x_direct)
-        for i in range(x.shape[0]):
-            x_pert = x.clone()
-            x_pert[i] += eps
-            y_pert, _ = self.solve_lower_level(x_pert)
-            dy_dxi = (y_pert - y_star) / eps
-            implicit_component[i] = torch.dot(dy_dxi, grad_y)
-        total_grad = grad_x_direct + implicit_component
-        return total_grad.detach(), grad_x_direct.detach(), implicit_component.detach()
-
-
-    # -------------------------------------------------------------------------
-    # F2CSA Algorithm 1: Complete penalty Lagrangian solver
-    # -------------------------------------------------------------------------
-    def solve_f2csa_penalty_lagrangian(self, x: torch.Tensor, y_star: torch.Tensor,
-                                       lam_tilde: torch.Tensor, rho: torch.Tensor,
-                                       alpha1: float, alpha2: float,
-                                       batch_size: Optional[int] = None) -> torch.Tensor:
-        """
-        Solve the F2CSA penalty Lagrangian minimization over y using CVXPy.
-
-        Implements Eq. 396-401: L_{λ̃,α}(x,y) = f(x,y) + α₁[g(x,y) - g(x,y*) + λ̃ᵀh(x,y)] + (α₂/2)Σᵢρᵢhᵢ(x,y)²
-        Subject to: h(x,y) ≤ 0 (original constraints remain active)
-
-        Args:
-            x: Current upper-level variable
-            y_star: Reference lower-level solution y*(x)
-            lam_tilde: Reference dual variables λ̃(x)
-            rho: Constraint gating weights ρᵢ(x)
-            alpha1, alpha2: F2CSA penalty parameters
-
-        Returns:
-            ỹ(x): Optimal y minimizing the penalty Lagrangian
-        """
-        # Convert to numpy for CVXPy
-        x_np = x.detach().cpu().numpy()
-        y_star_np = y_star.detach().cpu().numpy()
-        lam_np = lam_tilde.detach().cpu().numpy()
-        rho_np = rho.detach().cpu().numpy()
-
-        # Problem matrices (symmetrized for numerical stability)
-        Ql = (self.Q_lower.detach().cpu().numpy() + self.Q_lower.detach().cpu().numpy().T) / 2.0
-        Qu = (self.Q_upper.detach().cpu().numpy() + self.Q_upper.detach().cpu().numpy().T) / 2.0
-        P_np = self.P.detach().cpu().numpy()
-        A_np = self.A.detach().cpu().numpy()
-        B_np = self.B.detach().cpu().numpy()
-        b_np = self.b.detach().cpu().numpy()
-        c_lower_np = self.c_lower.detach().cpu().numpy()
-        c_upper_np = self.c_upper.detach().cpu().numpy()
-        x_target_np = self.x_target.detach().cpu().numpy()
-
-        # CVXPy variable and parameters for stochastic objective coefficients
-        y_cp = cp.Variable(self.dim)
-        q_lin_param = cp.Parameter(self.dim)  # stochastic linear term for g
-        c_upper_param = cp.Parameter(self.dim)  # stochastic linear term in f wrt y
-
-        # Build F2CSA penalty objective components
-        # f(x,y) = 0.5*(x - x_target)ᵀQ_upper(x - x_target) + c_upperᵀy
-        f_const = 0.5 * (x_np - x_target_np).T @ Qu @ (x_np - x_target_np)
-        f_cp = f_const + c_upper_param.T @ y_cp
-
-        # g(x,y) = 0.5*yᵀQ_lower*y + (c_lower + Pᵀx)ᵀy
-        q_lin_base = c_lower_np + P_np.T @ x_np
-        g_cp = 0.5 * cp.quad_form(y_cp, Ql) + q_lin_param.T @ y_cp
-        g_opt_cp = 0.5 * y_star_np.T @ Ql @ y_star_np + q_lin_param.T @ y_star_np
-
-        # Stochastic injection for f and g linear terms if batch_size provided
-        if batch_size is None:
-            q_lin_param.value = q_lin_base
-            c_upper_param.value = c_upper_np
-        else:
-            noise_scale = float(self.noise_std) / max(1.0, np.sqrt(batch_size))
-            q_lin_param.value = q_lin_base + np.random.randn(*q_lin_base.shape) * noise_scale
-            c_upper_param.value = c_upper_np + np.random.randn(*c_upper_np.shape) * noise_scale
-
-        # h(x,y) = Ax - By - b ≤ 0 (deterministic)
-        h_cp = A_np @ x_np - B_np @ y_cp - b_np
-        h_opt_cp = A_np @ x_np - B_np @ y_star_np - b_np
-
-        # F2CSA penalty Lagrangian (Eq. 396-401)
-        linear_penalty = g_cp - g_opt_cp + lam_np.T @ h_cp
-        quadratic_penalty = cp.sum(cp.multiply(rho_np, cp.square(h_cp)))
-
-        objective = cp.Minimize(
-            f_cp + alpha1 * linear_penalty + 0.5 * alpha2 * quadratic_penalty
-        )
-
-        # Solve with original constraints active
-        constraints = [h_cp <= 0]
-        problem = cp.Problem(objective, constraints)
-        problem.solve(solver=cp.SCS, verbose=False)
-
-        if problem.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE]:
-            raise RuntimeError(f"F2CSA penalty Lagrangian solve failed: status={problem.status}")
-
-        return torch.tensor(y_cp.value, device=self.device, dtype=self.dtype)
-
-
-    print(f"   F2CSA: Enhanced with all improvements")
-    print(f"   SSIGD: Smoothed gradient approach")
-    print(f"   DS-BLO: Doubly stochastic with momentum")
+                grad_y_star = -jnp.linalg.solve(hess_yy_g, grad_yx_g)
+            except jnp.linalg.LinAlgError:
+                grad_y_star = -jnp.linalg.pinv(hess_yy_g) @ grad_yx_g
+            
+            # Step 4: Apply the exact formula
+            return grad_x_f + grad_y_star.T @ grad_y_f
+        
+        def compute_all_gradients(x: jnp.ndarray, y: jnp.ndarray, 
+                                 noise_upper: Optional[jnp.ndarray] = None,
+                                 noise_lower: Optional[jnp.ndarray] = None) -> Dict[str, jnp.ndarray]:
+            """Compute all gradients in one unified call for comprehensive analysis"""
+            # Upper-level gradients
+            grad_x_f = grad_upper_objective_x(x, y, noise_upper)
+            grad_y_f = grad_upper_objective_y(x, y)
+            
+            # Lower-level gradients
+            grad_x_g = grad_lower_objective_x(x, y, noise_lower)
+            grad_y_g = grad_lower_objective_y(x, y, noise_lower)
+            
+            # Hessian and Jacobian for implicit differentiation
+            hess_yy_g = hess_lower_objective_yy(x, y, noise_lower)
+            jac_yx_g = jac_lower_objective_yx(x, y, noise_lower)
+            
+            # Implicit function theorem: Γêçy* = -[Γêçyy g]^{-1} Γêçyx g
+            try:
+                grad_y_star = -jnp.linalg.solve(hess_yy_g, jac_yx_g)
+            except jnp.linalg.LinAlgError:
+                grad_y_star = -jnp.linalg.pinv(hess_yy_g) @ jac_yx_g
+            
+            # Implicit gradient: Γêç╠éF(x) = Γêçx f(x, ┼╖(x)) + [Γêç╠éy*(x)]^T Γêçy f(x, ┼╖(x))
+            grad_F = grad_x_f + grad_y_star.T @ grad_y_f
+            
+            return {
+                'grad_x_f': grad_x_f,
+                'grad_y_f': grad_y_f,
+                'grad_x_g': grad_x_g,
+                'grad_y_g': grad_y_g,
+                'hess_yy_g': hess_yy_g,
+                'jac_yx_g': jac_yx_g,
+                'grad_y_star': grad_y_star,
+                'grad_F': grad_F
+            }
+        
+        # Assign functions as methods
+        self.upper_objective = upper_objective
+        self.lower_objective = lower_objective
+        self.constraints = constraints
+        self.grad_upper_objective_x = grad_upper_objective_x
+        self.grad_upper_objective_y = grad_upper_objective_y
+        self.grad_lower_objective_x = grad_lower_objective_x
+        self.grad_lower_objective_y = grad_lower_objective_y
+        self.hess_lower_objective_yy = hess_lower_objective_yy
+        self.jac_lower_objective_yx = jac_lower_objective_yx
+        self.compute_implicit_gradient = compute_implicit_gradient
+        self.compute_all_gradients = compute_all_gradients
+
+        def compute_constrained_implicit_gradient(x: jnp.ndarray,
+                                                  y: jnp.ndarray,
+                                                  lambda_ineq: Optional[jnp.ndarray] = None,
+                                                  tol: float = 1e-6,
+                                                  noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            """JIT-safe constrained implicit gradient using diagonal penalization.
+            Approximate dy_A/dx Γëê 0 by adding a large penalty to active coordinates
+            on the Hessian diagonal, then solve full-system dy/dx = -H_tilde^{-1} J.
+            """
+            grad_x_f = grad_upper_objective_x(x, y)
+            grad_y_f = grad_upper_objective_y(x, y)
+
+            H = hess_lower_objective_yy(x, y, noise_lower)
+            J = jac_lower_objective_yx(x, y, noise_lower)
+
+            # Active set detection (box) as boolean mask
+            if lambda_ineq is None:
+                active_mask = (jnp.abs(y) >= 1.0 - tol)
+            else:
+                box_active = (jnp.abs(y) >= 1.0 - tol)
+                dual_active = (lambda_ineq[: self.dim] > tol) | (lambda_ineq[self.dim :] > tol)
+                active_mask = box_active | dual_active
+
+            # Build penalized Hessian to freeze active coordinates
+            mask_f = active_mask.astype(H.dtype)
+            gamma = jnp.asarray(1e6, dtype=H.dtype)
+            H_tilde = H + jnp.diag(gamma * mask_f)
+
+            # Solve for dy/dx
+            try:
+                dy_dx = -jnp.linalg.solve(H_tilde, J)
+            except jnp.linalg.LinAlgError:
+                dy_dx = -jnp.linalg.pinv(H_tilde) @ J
+
+            grad_F = grad_x_f + dy_dx.T @ grad_y_f
+            return grad_F
+
+        self.compute_constrained_implicit_gradient = compute_constrained_implicit_gradient
+
+        # --- Custom derivative path for y*(x) using JAX custom_vjp ---
+        # Non-JAX forward that calls the QP solver
+        def _y_star_py(x_in: jnp.ndarray, noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            y_opt, _, _ = self.solve_ll_with_duals(x_in, noise_lower)
+            return y_opt
+
+        @jax.custom_vjp
+        def y_star(x_in: jnp.ndarray, noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            return _y_star_py(x_in, noise_lower)
+
+        def y_star_fwd(x_in: jnp.ndarray, noise_lower: Optional[jnp.ndarray]):
+            y = _y_star_py(x_in, noise_lower)
+            return y, (x_in, y, noise_lower)
+
+        def y_star_bwd(res, y_bar: jnp.ndarray):
+            x_in, y, noise_lower = res
+            # Implicit differentiation: dy/dx = -[Γêçyy g]^{-1} Γêçyx g
+            H = self.hess_lower_objective_yy(x_in, y, noise_lower)
+            J = self.jac_lower_objective_yx(x_in, y, noise_lower)
+            try:
+                V = jnp.linalg.solve(H, J)
+            except jnp.linalg.LinAlgError:
+                V = jnp.linalg.pinv(H) @ J
+            dy_dx = -V
+            x_bar = dy_dx.T @ y_bar
+            return (x_bar, None)
+
+        y_star.defvjp(y_star_fwd, y_star_bwd)
+
+        # Convenience: upper-level objective composed with y*(x)
+        def f_value_custom(x_in: jnp.ndarray, noise_lower: Optional[jnp.ndarray] = None) -> jnp.ndarray:
+            y = y_star(x_in, noise_lower)
+            return self.upper_objective(x_in, y)
+
+        # Expose methods (do not jit these to avoid tracing Python QP)
+        self.y_star = y_star
+        self.f_value_custom = f_value_custom
+    
+    def _setup_jax_compiled_functions(self):
+        """Setup JAX-compiled functions for optimal performance"""
+        # JAX-compiled versions for optimal performance
+        self.upper_objective_compiled = jax.jit(self.upper_objective)
+        self.lower_objective_compiled = jax.jit(self.lower_objective)
+        self.grad_upper_objective_x_compiled = jax.jit(self.grad_upper_objective_x)
+        self.grad_upper_objective_y_compiled = jax.jit(self.grad_upper_objective_y)
+        self.grad_lower_objective_x_compiled = jax.jit(self.grad_lower_objective_x)
+        self.grad_lower_objective_y_compiled = jax.jit(self.grad_lower_objective_y)
+        self.hess_lower_objective_yy_compiled = jax.jit(self.hess_lower_objective_yy)
+        self.jac_lower_objective_yx_compiled = jax.jit(self.jac_lower_objective_yx)
+        self.compute_implicit_gradient_compiled = jax.jit(self.compute_implicit_gradient)
+        self.compute_constrained_implicit_gradient_compiled = jax.jit(self.compute_constrained_implicit_gradient)
+        self.compute_all_gradients_compiled = jax.jit(self.compute_all_gradients)
+        
+        print(f"[OK] JAX-compiled functions ready for optimal performance")
+    
+    def _sample_instance_noise(self):
+        """Sample instance noise for upper and lower level problems"""
+        # Sample noise for upper level (Q_upper)
+        noise_upper_raw = torch.randn(self.dim, self.dim, device='cpu', dtype=torch.float64) * self.noise_std
+        # Make noise symmetric
+        noise_upper = (noise_upper_raw + noise_upper_raw.T) / 2
+        
+        # Sample noise for lower level (Q_lower) 
+        noise_lower_raw = torch.randn(self.dim, self.dim, device='cpu', dtype=torch.float64) * self.noise_std
+        # Make noise symmetric
+        noise_lower = (noise_lower_raw + noise_lower_raw.T) / 2
+        
+        return noise_upper, noise_lower
+    
+    def compute_upper_objective_torch(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Compute upper-level objective using PyTorch tensors"""
+        # Convert to JAX arrays
+        x_jax = jnp.array(x.detach().cpu().numpy())
+        y_jax = jnp.array(y.detach().cpu().numpy())
+        
+        # Use JAX-compiled function
+        F_jax = self.upper_objective_compiled(x_jax, y_jax)
+        
+        # Convert back to PyTorch tensor
+        return torch.tensor(np.array(F_jax), dtype=torch.float64, device='cpu')
+    
