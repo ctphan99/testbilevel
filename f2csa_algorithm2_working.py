@@ -44,6 +44,46 @@ class F2CSAAlgorithm2Working:
         else:
             return (D / v_norm) * v
     
+    def _solve_ll(self, x: torch.Tensor, alpha: float):
+        """
+        Robust wrapper to solve lower-level using the centralized solver.
+        Prefers problem.solve_lower_level(solver='cvxpy'); falls back to internal CVXPY path.
+        """
+        # Preferred public entrypoint with keywords
+        fn = getattr(self.problem, 'solve_lower_level', None)
+        if callable(fn):
+            try:
+                return fn(x, solver='cvxpy', alpha=alpha)
+            except Exception:
+                pass
+        # Fallback: internal CVXPY path with keywords
+        fn = getattr(self.problem, '_solve_cvxpy', None)
+        if callable(fn):
+            # Try keyword arguments matching signature (x, alpha, noise_lower=None, q=None)
+            try:
+                return fn(x=x, alpha=alpha, noise_lower=None, q=None)
+            except Exception:
+                # Try positional
+                try:
+                    return fn(x, alpha, None, None)
+                except Exception:
+                    pass
+        # As a last resort, try other common names
+        for name in ['solve_lower', 'solve_ll', '_solve_lower_level', '_solve_ll']:
+            fn = getattr(self.problem, name, None)
+            if callable(fn):
+                try:
+                    return fn(x, solver='cvxpy', alpha=alpha)
+                except Exception:
+                    try:
+                        return fn(x, alpha)
+                    except Exception:
+                        try:
+                            return fn(x)
+                        except Exception:
+                            pass
+        raise AttributeError('No compatible lower-level solver found on problem')
+    
     def optimize(self, x0: torch.Tensor, T: int, D: float, eta: float, 
                  delta: float, alpha: float, N_g: int = None, 
                  warm_ll: bool = False,
@@ -115,7 +155,7 @@ class F2CSAAlgorithm2Working:
                     g_t = g_t * (self.reference_grad_norm / current_norm)
 
             # Compute upper-level loss at x_t to monitor Algorithm 2 gap (f(x, y*))
-            y_star, _, _ = self.problem.solve_lower_level(x_t, solver='gurobi', alpha=alpha)
+            y_star, _, _ = self._solve_ll(x_t, alpha)
             # Use fixed CRN if available
             if hasattr(self, 'crn_upper'):
                 ul_loss_t = self.problem.upper_objective(x_t, y_star, self.crn_upper).item()
@@ -182,7 +222,7 @@ class F2CSAAlgorithm2Working:
             if start_idx < len(z_history):
                 z_group = z_history[start_idx:end_idx]
                 x_k = torch.stack(z_group).mean(dim=0)
-                y_star_k, _, _ = self.problem.solve_lower_level(x_k, solver='gurobi', alpha=alpha)
+                y_star_k, _, _ = self._solve_ll(x_k, alpha)
                 ul_loss_k = self.problem.upper_objective(x_k, y_star_k).item()
                 candidates.append((x_k, ul_loss_k))
         
@@ -201,7 +241,7 @@ class F2CSAAlgorithm2Working:
         final_g_norm = torch.norm(final_g).item()
         
         # Compute final upper-level loss f(x, y*) as Algorithm 2 gap
-        y_star, _, _ = self.problem.solve_lower_level(x_out, solver='gurobi', alpha=alpha)
+        y_star, _, _ = self._solve_ll(x_out, alpha)
         # Use fixed CRN if available
         if hasattr(self, 'crn_upper'):
             final_ul_loss = self.problem.upper_objective(x_out, y_star, self.crn_upper).item()
